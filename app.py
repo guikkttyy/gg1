@@ -6,6 +6,7 @@ import os
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", os.urandom(24).hex())
+app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024
 
 # ========== SQLite 数据库初始化 ==========
 
@@ -113,6 +114,67 @@ def search():
     if username and username in USERS:
         user_info = {k: v for k, v in USERS[username].items() if k != "password"}
     return render_template("index.html", username=username, user=user_info, search_results=results, keyword=keyword)
+
+
+@app.route("/upload", methods=["GET", "POST"])
+def upload():
+    if "username" not in session:
+        return redirect("/login")
+    error = None
+    file_url = None
+    if request.method == "POST":
+        f = request.files.get("file")
+        if f and f.filename:
+            # 1. 路径遍历防护：过滤文件名，只取原始名称，去除路径
+            safe_filename = os.path.basename(f.filename)
+
+            # 2. 检查文件扩展名，只允许图片类型
+            allowed_extensions = {"jpg", "jpeg", "png", "gif", "webp", "bmp"}
+            ext = safe_filename.rsplit(".", 1)[-1].lower() if "." in safe_filename else ""
+            if ext not in allowed_extensions:
+                error = "仅允许上传图片文件（jpg, jpeg, png, gif, webp, bmp）"
+                return render_template("upload.html", error=error, file_url=file_url)
+
+            # 3. 检查 MIME 类型
+            allowed_mime = {"image/jpeg", "image/png", "image/gif", "image/webp", "image/bmp"}
+            if f.mimetype and f.mimetype not in allowed_mime:
+                error = f"不支持的文件类型（MIME: {f.mimetype}）"
+                return render_template("upload.html", error=error, file_url=file_url)
+
+            # 4. 读取文件头部检查 magic bytes（文件内容签名）
+            magic_bytes = f.read(8)
+            f.seek(0)
+            is_valid_image = False
+            if ext == "jpg" or ext == "jpeg":
+                if magic_bytes.startswith(b"\xff\xd8\xff"):
+                    is_valid_image = True
+            elif ext == "png":
+                if magic_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
+                    is_valid_image = True
+            elif ext == "gif":
+                if magic_bytes.startswith(b"GIF87a") or magic_bytes.startswith(b"GIF89a"):
+                    is_valid_image = True
+            elif ext == "webp":
+                if magic_bytes.startswith(b"RIFF") and magic_bytes[4:8] == b"WEBP":
+                    is_valid_image = True
+            elif ext == "bmp":
+                if magic_bytes.startswith(b"BM"):
+                    is_valid_image = True
+            if not is_valid_image:
+                error = "文件内容与扩展名不匹配，请上传真实图片文件"
+                return render_template("upload.html", error=error, file_url=file_url)
+
+            # 5. 使用 UUID 重命名文件，防止文件名冲突和覆盖
+            import uuid
+            new_filename = f"{uuid.uuid4().hex}.{ext}"
+            upload_dir = os.path.join(app.root_path, "static", "uploads")
+            os.makedirs(upload_dir, exist_ok=True)
+            save_path = os.path.join(upload_dir, new_filename)
+            f.save(save_path)
+            file_url = f"/static/uploads/{new_filename}"
+        else:
+            error = "请选择一个文件"
+    return render_template("upload.html", error=error, file_url=file_url)
 
 
 @app.route("/logout")

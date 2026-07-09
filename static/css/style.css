@@ -198,3 +198,57 @@ body {
 .value {
     color: #333;
 }
+
+/* 文件输入框样式 */
+.file-input {
+    width: 100%;
+    padding: 10px;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    font-size: 14px;
+    background: #fafafa;
+    cursor: pointer;
+}
+
+/* 上传成功区域 */
+.upload-success {
+    margin-top: 25px;
+    padding-top: 20px;
+    border-top: 1px solid #eee;
+}
+
+.upload-success h3 {
+    color: #27ae60;
+    font-size: 16px;
+    margin-bottom: 15px;
+    border-bottom: none;
+    padding-bottom: 0;
+}
+
+.preview {
+    text-align: center;
+    margin: 15px 0;
+}
+
+.avatar-preview {
+    max-width: 200px;
+    max-height: 200px;
+    border-radius: 8px;
+    border: 3px solid #667eea;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+}
+
+.file-link {
+    font-size: 13px;
+    color: #888;
+    word-break: break-all;
+    margin-top: 10px;
+}
+
+.file-link code {
+    background: #f0f2f5;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 12px;
+    color: #667eea;
+}

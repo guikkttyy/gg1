@@ -46,7 +46,7 @@ USERS = {
         "role": "admin",
         "email": "admin@example.com",
         "phone": "13800138000",
-        "balance": 99999
+        "balance": 9999900
     },
     "alice": {
         "id": 2,
@@ -55,7 +55,7 @@ USERS = {
         "role": "user",
         "email": "alice@example.com",
         "phone": "13900139001",
-        "balance": 100
+        "balance": 10000
     }
 }
 
@@ -95,10 +95,11 @@ def register():
         phone = request.form.get("phone", "")
         conn = sqlite3.connect("data/users.db")
         c = conn.cursor()
+        hashed_pw = generate_password_hash(password)
         sql = "INSERT INTO users (username, password, email, phone) VALUES (?, ?, ?, ?)"
-        print(f"[register] 执行 SQL: {sql} 参数: ({username}, {password}, {email}, {phone})")
+        print(f"[register] 执行 SQL: {sql} 参数: ({username}, [HASHED], {email}, {phone})")
         try:
-            c.execute(sql, (username, password, email, phone))
+            c.execute(sql, (username, hashed_pw, email, phone))
             conn.commit()
             conn.close()
             return redirect("/login?msg=注册成功，请登录")
@@ -111,6 +112,8 @@ def register():
 
 @app.route("/search")
 def search():
+    if "username" not in session:
+        return redirect("/login")
     keyword = request.args.get("keyword", "")
     conn = sqlite3.connect("data/users.db")
     conn.row_factory = sqlite3.Row
@@ -193,17 +196,18 @@ def upload():
 def profile():
     if "username" not in session:
         return redirect("/login")
+    login_username = session.get("username")
+    login_user = USERS.get(login_username)
+    if not login_user:
+        return redirect("/login")
+
+    # 只允许查看自己的资料，拒绝越权访问
     user_id = request.args.get("user_id", type=int)
-    if not user_id:
-        return redirect("/")
-    user_data = None
-    for u in USERS.values():
-        if u["id"] == user_id:
-            user_data = {k: v for k, v in u.items() if k != "password"}
-            break
-    if not user_data:
-        return render_template("profile.html", user=None)
-    return render_template("profile.html", user=user_data)
+    if not user_id or user_id != login_user["id"]:
+        return redirect(f"/profile?user_id={login_user['id']}")
+
+    user_data = {k: v for k, v in login_user.items() if k != "password"}
+    return render_template("profile.html", user=user_data, msg=request.args.get("msg"), error=request.args.get("error"))
 
 
 @app.route("/recharge", methods=["POST"])
@@ -217,15 +221,18 @@ def recharge():
 
     # 只能给自己的账号充值，从 session 获取 user_id
     user_id = login_user["id"]
-    amount = request.form.get("amount", type=float, default=0)
+    amount_yuan = request.form.get("amount", type=float, default=0)
 
     # 校验金额必须为正数
-    if amount <= 0:
+    if amount_yuan <= 0:
         return redirect(f"/profile?user_id={user_id}&error=金额必须大于0")
+
+    # 转换为整数分，避免浮点数精度问题
+    amount_cents = int(round(amount_yuan * 100))
 
     for u in USERS.values():
         if u["id"] == user_id:
-            u["balance"] = u["balance"] + amount
+            u["balance"] = u["balance"] + amount_cents
             break
     return redirect(f"/profile?user_id={user_id}&msg=充值成功")
 

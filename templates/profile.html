@@ -4,11 +4,11 @@
 {% if user %}
 <div class="card">
     <h2>个人中心</h2>
-    {% if request.args.get("msg") %}
-    <div class="success-message">{{ request.args.get("msg") }}</div>
+    {% if msg %}
+    <div class="success-message">{{ msg }}</div>
     {% endif %}
-    {% if request.args.get("error") %}
-    <div class="error-message">{{ request.args.get("error") }}</div>
+    {% if error %}
+    <div class="error-message">{{ error }}</div>
     {% endif %}
     <h3>基本信息</h3>
     <ul class="user-info-list">
@@ -17,7 +17,7 @@
         <li><span class="label">邮箱：</span><span class="value">{{ user.email }}</span></li>
         <li><span class="label">手机：</span><span class="value">{{ user.phone }}</span></li>
         <li><span class="label">角色：</span><span class="value">{{ user.role }}</span></li>
-        <li><span class="label">余额：</span><span class="value">{{ user.balance }}</span></li>
+        <li><span class="label">余额：</span><span class="value">{{ "%.2f"|format(user.balance / 100) }} 元</span></li>
     </ul>
 </div>
 

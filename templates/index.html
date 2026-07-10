@@ -10,7 +10,7 @@
         <li><span class="label">邮箱：</span><span class="value">{{ user.email }}</span></li>
         <li><span class="label">手机：</span><span class="value">{{ user.phone }}</span></li>
         <li><span class="label">角色：</span><span class="value">{{ user.role }}</span></li>
-        <li><span class="label">余额：</span><span class="value">{{ user.balance }}</span></li>
+        <li><span class="label">余额：</span><span class="value">{{ "%.2f"|format(user.balance / 100) }} 元</span></li>
     </ul>
     <a href="/upload" class="btn btn-primary" style="width:auto;padding:8px 20px;margin-top:10px;">上传头像</a>
     <a href="/profile?user_id={{ user.id }}" class="btn btn-primary" style="width:auto;padding:8px 20px;margin-top:10px;">个人中心</a>

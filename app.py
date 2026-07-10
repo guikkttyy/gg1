@@ -2,11 +2,19 @@ from flask import Flask, render_template, request, redirect, session
 import sqlite3
 import os
 from werkzeug.security import generate_password_hash, check_password_hash
-import os
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", os.urandom(24).hex())
 app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024
+
+
+@app.context_processor
+def inject_current_user_id():
+    username = session.get("username")
+    uid = None
+    if username and username in USERS:
+        uid = USERS[username].get("id")
+    return dict(current_user_id=uid)
 
 # ========== SQLite 数据库初始化 ==========
 
@@ -21,15 +29,18 @@ def init_db():
         email TEXT,
         phone TEXT
     )''')
-    # 插入默认用户
-    c.execute("INSERT OR IGNORE INTO users (username, password, email, phone) VALUES ('admin', 'admin123', 'admin@example.com', '13800138000')")
-    c.execute("INSERT OR IGNORE INTO users (username, password, email, phone) VALUES ('alice', 'alice2025', 'alice@example.com', '13900139001')")
+    # 插入默认用户（密码哈希存储）
+    c.execute("INSERT OR IGNORE INTO users (username, password, email, phone) VALUES (?, ?, ?, ?)",
+              ("admin", generate_password_hash("Admin@123456"), "admin@example.com", "13800138000"))
+    c.execute("INSERT OR IGNORE INTO users (username, password, email, phone) VALUES (?, ?, ?, ?)",
+              ("alice", generate_password_hash("Alice@2025!Secure"), "alice@example.com", "13900139001"))
     conn.commit()
     conn.close()
     print("[init_db] 数据库初始化完成，默认用户已插入")
 
 USERS = {
     "admin": {
+        "id": 1,
         "username": "admin",
         "password": generate_password_hash("Admin@123456"),
         "role": "admin",
@@ -38,6 +49,7 @@ USERS = {
         "balance": 99999
     },
     "alice": {
+        "id": 2,
         "username": "alice",
         "password": generate_password_hash("Alice@2025!Secure"),
         "role": "user",
@@ -175,6 +187,47 @@ def upload():
         else:
             error = "请选择一个文件"
     return render_template("upload.html", error=error, file_url=file_url)
+
+
+@app.route("/profile")
+def profile():
+    if "username" not in session:
+        return redirect("/login")
+    user_id = request.args.get("user_id", type=int)
+    if not user_id:
+        return redirect("/")
+    user_data = None
+    for u in USERS.values():
+        if u["id"] == user_id:
+            user_data = {k: v for k, v in u.items() if k != "password"}
+            break
+    if not user_data:
+        return render_template("profile.html", user=None)
+    return render_template("profile.html", user=user_data)
+
+
+@app.route("/recharge", methods=["POST"])
+def recharge():
+    if "username" not in session:
+        return redirect("/login")
+    login_username = session.get("username")
+    login_user = USERS.get(login_username)
+    if not login_user:
+        return redirect("/login")
+
+    # 只能给自己的账号充值，从 session 获取 user_id
+    user_id = login_user["id"]
+    amount = request.form.get("amount", type=float, default=0)
+
+    # 校验金额必须为正数
+    if amount <= 0:
+        return redirect(f"/profile?user_id={user_id}&error=金额必须大于0")
+
+    for u in USERS.values():
+        if u["id"] == user_id:
+            u["balance"] = u["balance"] + amount
+            break
+    return redirect(f"/profile?user_id={user_id}&msg=充值成功")
 
 
 @app.route("/logout")

@@ -172,6 +172,17 @@ body {
     font-size: 14px;
 }
 
+/* 成功提示 */
+.success-message {
+    background: #e8fde8;
+    color: #27ae60;
+    border: 1px solid #b6f5b6;
+    border-radius: 6px;
+    padding: 12px 16px;
+    margin-bottom: 20px;
+    font-size: 14px;
+}
+
 /* 用户信息列表 */
 .user-info-list {
     list-style: none;

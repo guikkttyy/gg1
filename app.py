@@ -66,7 +66,7 @@ def index():
     user_info = None
     if username and username in USERS:
         user_info = {k: v for k, v in USERS[username].items() if k != "password"}
-    return render_template("index.html", username=username, user=user_info, search_results=None, keyword="")
+    return render_template("index.html", username=username, user=user_info, search_results=None, keyword="", page_content=None)
 
 
 @app.route("/login", methods=["GET", "POST"])
@@ -80,7 +80,7 @@ def login():
             session["username"] = username
             # 登录后不将密码传到模板
             user_info = {k: v for k, v in USERS[username].items() if k != "password"}
-            return render_template("index.html", username=username, user=user_info, search_results=None, keyword="")
+            return render_template("index.html", username=username, user=user_info, search_results=None, keyword="", page_content=None)
         else:
             error = "用户名或密码错误，请重新输入"
     return render_template("login.html", error=error, msg=msg)
@@ -128,7 +128,7 @@ def search():
     user_info = None
     if username and username in USERS:
         user_info = {k: v for k, v in USERS[username].items() if k != "password"}
-    return render_template("index.html", username=username, user=user_info, search_results=results, keyword=keyword)
+    return render_template("index.html", username=username, user=user_info, search_results=results, keyword=keyword, page_content=None)
 
 
 @app.route("/upload", methods=["GET", "POST"])
@@ -237,6 +237,36 @@ def recharge():
     return redirect(f"/profile?user_id={user_id}&msg=充值成功")
 
 
+@app.route("/page")
+def page():
+    name = request.args.get("name", "")
+    if not name:
+        return redirect("/")
+
+    # 白名单校验 + 路径规范化，防止文件包含漏洞
+    allowed_pages = {"help", "about", "contact"}
+    page_name = name.replace(".html", "")
+    if page_name not in allowed_pages:
+        content = "<h2>页面不存在</h2><p>抱歉，您请求的页面未找到。</p>"
+    else:
+        file_path = os.path.join("pages", page_name + ".html")
+        # 规范化路径后检查是否仍在 pages/ 目录内
+        real_path = os.path.realpath(file_path)
+        pages_dir = os.path.realpath("pages")
+        if not real_path.startswith(pages_dir + os.sep) and real_path != pages_dir:
+            content = "<h2>页面不存在</h2><p>抱歉，您请求的页面未找到。</p>"
+        elif os.path.isfile(real_path):
+            with open(real_path, "r", encoding="utf-8") as f:
+                content = f.read()
+        else:
+            content = "<h2>页面不存在</h2><p>抱歉，您请求的页面未找到。</p>"
+    username = session.get("username")
+    user_info = None
+    if username and username in USERS:
+        user_info = {k: v for k, v in USERS[username].items() if k != "password"}
+    return render_template("index.html", username=username, user=user_info, search_results=None, keyword="", page_content=content)
+
+
 @app.route("/logout")
 def logout():
     session.clear()
@@ -245,4 +275,4 @@ def logout():
 
 if __name__ == "__main__":
     init_db()
-    app.run(host="192.168.139.128", port=5000, debug=True)
+    app.run(host="0.0.0.0", port=5000, debug=True)

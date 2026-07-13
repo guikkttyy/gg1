@@ -263,3 +263,46 @@ body {
     font-size: 12px;
     color: #667eea;
 }
+
+/* 动态页面内容样式 */
+.page-content {
+    line-height: 1.8;
+    font-size: 15px;
+}
+
+.page-content h2 {
+    color: #333;
+    font-size: 22px;
+    margin-bottom: 15px;
+    border-bottom: 2px solid #667eea;
+    padding-bottom: 10px;
+}
+
+.page-content h3 {
+    color: #555;
+    font-size: 17px;
+    margin: 20px 0 10px 0;
+}
+
+.page-content ul, .page-content ol {
+    margin: 10px 0 10px 20px;
+    padding: 0;
+}
+
+.page-content li {
+    margin-bottom: 8px;
+    line-height: 1.6;
+}
+
+.page-content strong {
+    color: #667eea;
+}
+
+.page-content em {
+    color: #888;
+    font-size: 13px;
+}
+
+.page-content p {
+    margin: 10px 0;
+}

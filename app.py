@@ -1,11 +1,33 @@
-from flask import Flask, render_template, request, redirect, session
+from flask import Flask, render_template, request, redirect, session, abort
 import sqlite3
 import os
+import secrets
 from werkzeug.security import generate_password_hash, check_password_hash
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", os.urandom(24).hex())
 app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024
+
+
+# ========== CSRF 防护 ==========
+
+def generate_csrf_token():
+    if "_csrf_token" not in session:
+        session["_csrf_token"] = secrets.token_hex(32)
+    return session["_csrf_token"]
+
+
+def validate_csrf_token():
+    token = request.form.get("_csrf_token")
+    stored = session.get("_csrf_token")
+    if not token or not stored or token != stored:
+        return False
+    return True
+
+
+@app.context_processor
+def inject_csrf_token():
+    return dict(csrf_token=generate_csrf_token())
 
 
 @app.context_processor
@@ -74,6 +96,8 @@ def login():
     error = None
     msg = request.args.get("msg", "")
     if request.method == "POST":
+        if not validate_csrf_token():
+            abort(403)
         username = request.form.get("username", "")
         password = request.form.get("password", "")
         if username in USERS and check_password_hash(USERS[username]["password"], password):
@@ -89,6 +113,8 @@ def login():
 @app.route("/register", methods=["GET", "POST"])
 def register():
     if request.method == "POST":
+        if not validate_csrf_token():
+            abort(403)
         username = request.form.get("username", "")
         password = request.form.get("password", "")
         email = request.form.get("email", "")
@@ -138,6 +164,8 @@ def upload():
     error = None
     file_url = None
     if request.method == "POST":
+        if not validate_csrf_token():
+            abort(403)
         f = request.files.get("file")
         if f and f.filename:
             # 1. 路径遍历防护：过滤文件名，只取原始名称，去除路径
@@ -214,6 +242,8 @@ def profile():
 def recharge():
     if "username" not in session:
         return redirect("/login")
+    if not validate_csrf_token():
+        abort(403)
     login_username = session.get("username")
     login_user = USERS.get(login_username)
     if not login_user:
@@ -265,6 +295,19 @@ def page():
     if username and username in USERS:
         user_info = {k: v for k, v in USERS[username].items() if k != "password"}
     return render_template("index.html", username=username, user=user_info, search_results=None, keyword="", page_content=content)
+
+
+@app.route("/change-password", methods=["POST"])
+def change_password():
+    if "username" not in session:
+        return redirect("/login")
+    if not validate_csrf_token():
+        abort(403)
+    username = request.form.get("username", "")
+    new_password = request.form.get("new_password", "")
+    if username in USERS:
+        USERS[username]["password"] = generate_password_hash(new_password)
+    return redirect("/profile?user_id=" + str(USERS.get(username, {}).get("id", "")) + "&msg=密码修改成功")
 
 
 @app.route("/logout")

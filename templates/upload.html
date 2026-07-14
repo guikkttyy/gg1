@@ -7,6 +7,7 @@
     <div class="error-message">{{ error }}</div>
     {% endif %}
     <form method="post" action="/upload" enctype="multipart/form-data">
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
         <div class="form-group">
             <label for="file">选择文件</label>
             <input type="file" id="file" name="file" class="file-input">

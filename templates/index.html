@@ -64,6 +64,32 @@
     {% endif %}
 </div>
 
+<div class="card">
+    <h3>URL 抓取</h3>
+    <form method="post" action="/fetch-url">
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+        <div class="form-group">
+            <label for="url">目标 URL</label>
+            <input type="text" id="url" name="url" placeholder="输入要抓取的 URL（支持 http://, https://, file:// 等）" class="search-input" required>
+        </div>
+        <button type="submit" class="btn btn-primary">抓 取</button>
+    </form>
+
+    {% if fetch_error %}
+    <div class="error-message">{{ fetch_error }}</div>
+    {% endif %}
+
+    {% if fetch_status is not none %}
+    <div class="fetch-result">
+        <h4>抓取结果</h4>
+        <p><strong>状态码：</strong>{{ fetch_status }}</p>
+        <div class="fetch-content-box">
+            <pre>{{ fetch_content }}</pre>
+        </div>
+    </div>
+    {% endif %}
+</div>
+
 <a href="/logout" class="btn btn-danger" style="display:inline-block;margin-top:0;">退出登录</a>
 {% else %}
 <div class="card">

@@ -2,6 +2,10 @@ from flask import Flask, render_template, request, redirect, session, abort
 import sqlite3
 import os
 import secrets
+import urllib.request, urllib.error
+import socket
+import ipaddress
+from urllib.parse import urlparse
 from werkzeug.security import generate_password_hash, check_password_hash
 
 app = Flask(__name__)
@@ -88,7 +92,7 @@ def index():
     user_info = None
     if username and username in USERS:
         user_info = {k: v for k, v in USERS[username].items() if k != "password"}
-    return render_template("index.html", username=username, user=user_info, search_results=None, keyword="", page_content=None)
+    return render_template("index.html", username=username, user=user_info, search_results=None, keyword="", page_content=None, fetch_status=None, fetch_content=None, fetch_error=None)
 
 
 @app.route("/login", methods=["GET", "POST"])
@@ -104,7 +108,7 @@ def login():
             session["username"] = username
             # 登录后不将密码传到模板
             user_info = {k: v for k, v in USERS[username].items() if k != "password"}
-            return render_template("index.html", username=username, user=user_info, search_results=None, keyword="", page_content=None)
+            return render_template("index.html", username=username, user=user_info, search_results=None, keyword="", page_content=None, fetch_status=None, fetch_content=None, fetch_error=None)
         else:
             error = "用户名或密码错误，请重新输入"
     return render_template("login.html", error=error, msg=msg)
@@ -154,7 +158,7 @@ def search():
     user_info = None
     if username and username in USERS:
         user_info = {k: v for k, v in USERS[username].items() if k != "password"}
-    return render_template("index.html", username=username, user=user_info, search_results=results, keyword=keyword, page_content=None)
+    return render_template("index.html", username=username, user=user_info, search_results=results, keyword=keyword, page_content=None, fetch_status=None, fetch_content=None, fetch_error=None)
 
 
 @app.route("/upload", methods=["GET", "POST"])
@@ -294,7 +298,7 @@ def page():
     user_info = None
     if username and username in USERS:
         user_info = {k: v for k, v in USERS[username].items() if k != "password"}
-    return render_template("index.html", username=username, user=user_info, search_results=None, keyword="", page_content=content)
+    return render_template("index.html", username=username, user=user_info, search_results=None, keyword="", page_content=content, fetch_status=None, fetch_content=None, fetch_error=None)
 
 
 @app.route("/change-password", methods=["POST"])
@@ -308,6 +312,66 @@ def change_password():
     if username in USERS:
         USERS[username]["password"] = generate_password_hash(new_password)
     return redirect("/profile?user_id=" + str(USERS.get(username, {}).get("id", "")) + "&msg=密码修改成功")
+
+
+@app.route("/fetch-url", methods=["POST"])
+def fetch_url():
+    if "username" not in session:
+        return redirect("/login")
+    target_url = request.form.get("url", "")
+    fetch_status = None
+    fetch_content = None
+    fetch_error = None
+    if target_url:
+        try:
+            # ===== SSRF 防护 =====
+
+            # 1. 协议白名单：只允许 http 和 https
+            parsed = urlparse(target_url)
+            if parsed.scheme not in ("http", "https"):
+                fetch_error = f"不支持的协议: {parsed.scheme}，仅允许 http:// 和 https://"
+
+            # 2. 解析目标主机名，检查是否为内网地址
+            if not fetch_error:
+                hostname = parsed.hostname
+                if hostname:
+                    try:
+                        # 获取所有 IP 地址
+                        addrinfo = socket.getaddrinfo(hostname, None)
+                        ips = set()
+                        for addr in addrinfo:
+                            ip = addr[4][0]
+                            ips.add(ip)
+
+                        # 检查每个 IP 是否为私有/内网地址
+                        for ip in ips:
+                            try:
+                                ip_obj = ipaddress.ip_address(ip)
+                                if ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local:
+                                    fetch_error = f"禁止访问内网地址: {ip}"
+                                    break
+                            except ValueError:
+                                pass
+                    except socket.gaierror:
+                        fetch_error = f"无法解析主机名: {hostname}"
+                else:
+                    fetch_error = "无效的 URL"
+
+            if not fetch_error:
+                resp = urllib.request.urlopen(target_url, timeout=10)
+                fetch_status = resp.status
+                raw = resp.read()
+                fetch_content = raw.decode("utf-8", errors="replace")[:5000]
+        except Exception as e:
+            fetch_error = f"抓取失败: {e}"
+    else:
+        fetch_error = "请输入 URL"
+
+    username = session.get("username")
+    user_info = None
+    if username and username in USERS:
+        user_info = {k: v for k, v in USERS[username].items() if k != "password"}
+    return render_template("index.html", username=username, user=user_info, search_results=None, keyword="", page_content=None, fetch_status=fetch_status, fetch_content=fetch_content, fetch_error=fetch_error)
 
 
 @app.route("/logout")

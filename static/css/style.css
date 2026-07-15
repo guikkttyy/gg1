@@ -306,3 +306,35 @@ body {
 .page-content p {
     margin: 10px 0;
 }
+
+/* URL 抓取结果样式 */
+.fetch-result {
+    margin-top: 20px;
+    padding-top: 15px;
+    border-top: 1px solid #eee;
+}
+
+.fetch-result h4 {
+    font-size: 16px;
+    color: #333;
+    margin-bottom: 10px;
+}
+
+.fetch-content-box {
+    background: #f5f5f5;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    padding: 15px;
+    max-height: 400px;
+    overflow-y: auto;
+    margin-top: 10px;
+}
+
+.fetch-content-box pre {
+    margin: 0;
+    font-size: 12px;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-break: break-all;
+    color: #333;
+}

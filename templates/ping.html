@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="card" style="max-width: 700px; margin: 0 auto;">
+    <h2>Ping 网络诊断</h2>
+    <form method="post" action="/ping" class="search-form">
+        <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+        <div class="search-box">
+            <input type="text" name="ip" placeholder="输入 IP 地址或域名" class="search-input" required style="flex:1;">
+            <button type="submit" class="btn btn-primary search-btn">Ping</button>
+        </div>
+    </form>
+
+    {% if result %}
+    <div class="ping-result">
+        <h4>执行结果</h4>
+        <div class="ping-console">
+            <pre>{{ result }}</pre>
+        </div>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

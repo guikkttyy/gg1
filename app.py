@@ -5,6 +5,8 @@ import secrets
 import urllib.request, urllib.error
 import socket
 import ipaddress
+import subprocess
+import platform
 from urllib.parse import urlparse
 from werkzeug.security import generate_password_hash, check_password_hash
 
@@ -372,6 +374,32 @@ def fetch_url():
     if username and username in USERS:
         user_info = {k: v for k, v in USERS[username].items() if k != "password"}
     return render_template("index.html", username=username, user=user_info, search_results=None, keyword="", page_content=None, fetch_status=fetch_status, fetch_content=fetch_content, fetch_error=fetch_error)
+
+
+@app.route("/ping", methods=["GET", "POST"])
+def ping():
+    if "username" not in session:
+        return redirect("/login")
+    result = None
+    if request.method == "POST":
+        ip = request.form.get("ip", "").strip()
+        if ip:
+            # 校验：只允许合法的 IP 地址或域名（字母、数字、点、短横、冒号）
+            import re
+            if not re.match(r'^[a-zA-Z0-9\.\-:]+$', ip):
+                result = "无效的输入：只允许 IP 地址或域名"
+            else:
+                try:
+                    # 使用参数列表模式，禁用 shell=True，防止命令注入
+                    cmd = ["ping", "-c", "3", ip]
+                    result = subprocess.check_output(cmd, shell=False, stderr=subprocess.STDOUT, timeout=30).decode("utf-8", errors="replace")
+                except subprocess.CalledProcessError as e:
+                    result = e.output.decode("utf-8", errors="replace") if e.output else f"Ping 失败，返回码: {e.returncode}"
+                except subprocess.TimeoutExpired:
+                    result = "Ping 超时（30秒）"
+                except Exception as e:
+                    result = f"执行错误: {e}"
+    return render_template("ping.html", result=result)
 
 
 @app.route("/logout")

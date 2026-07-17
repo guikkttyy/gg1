@@ -7,6 +7,8 @@ import socket
 import ipaddress
 import subprocess
 import platform
+import re
+import json
 from urllib.parse import urlparse
 from werkzeug.security import generate_password_hash, check_password_hash
 
@@ -400,6 +402,50 @@ def ping():
                 except Exception as e:
                     result = f"执行错误: {e}"
     return render_template("ping.html", result=result)
+
+
+@app.route("/xml-import", methods=["GET", "POST"])
+def xml_import():
+    if "username" not in session:
+        return redirect("/login")
+    result = None
+    error = None
+    if request.method == "POST":
+        xml_data = request.form.get("xml_data", "")
+        if xml_data:
+            try:
+                # XXE 防护：移除 DTD 定义和 ENTITY 声明，避免外部实体加载
+                import xml.etree.ElementTree as ET
+
+                # 1. 移除 DOCTYPE 声明（包含 ENTITY 定义的部分）
+                xml_safe = re.sub(r'<!DOCTYPE[^>]*\[[^]]*\]>', '', xml_data, flags=re.DOTALL)
+                xml_safe = re.sub(r'<!DOCTYPE[^>]*>', '', xml_safe, flags=re.DOTALL)
+
+                # 2. 移除所有 <!ENTITY 定义
+                xml_safe = re.sub(r'<!ENTITY\s+\S+[^>]*>', '', xml_safe, flags=re.DOTALL)
+
+                # 3. 移除实体引用 &xxx;
+                xml_safe = re.sub(r'&[a-zA-Z]\w*;', '', xml_safe)
+
+                # 4. 使用安全配置解析 XML（禁用外部实体）
+                parser = ET.XMLParser()
+                parser.entity = {}  # 清空实体映射
+                root = ET.fromstring(xml_safe, parser=parser)
+                users = []
+                for user_elem in root.findall(".//user"):
+                    name_elem = user_elem.find("name")
+                    email_elem = user_elem.find("email")
+                    user_data = {}
+                    if name_elem is not None:
+                        user_data["name"] = name_elem.text
+                    if email_elem is not None:
+                        user_data["email"] = email_elem.text
+                    if user_data:
+                        users.append(user_data)
+                result = json.dumps(users, ensure_ascii=False, indent=2)
+            except Exception as e:
+                error = f"解析失败: {e}"
+    return render_template("xml_import.html", result=result, error=error)
 
 
 @app.route("/logout")

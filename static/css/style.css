@@ -368,3 +368,33 @@ body {
     white-space: pre-wrap;
     word-break: break-all;
 }
+
+/* XML 导入结果样式 */
+.xml-result {
+    margin-top: 20px;
+}
+
+.xml-result h3 {
+    font-size: 16px;
+    color: #333;
+    margin-bottom: 10px;
+}
+
+.xml-console {
+    background: #1a1a2e;
+    border: 1px solid #333;
+    border-radius: 6px;
+    padding: 15px;
+    max-height: 500px;
+    overflow-y: auto;
+}
+
+.xml-console pre {
+    margin: 0;
+    font-size: 13px;
+    line-height: 1.6;
+    color: #00ff00;
+    font-family: "Courier New", monospace;
+    white-space: pre-wrap;
+    word-break: break-all;
+}
